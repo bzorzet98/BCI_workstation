@@ -1,0 +1,10 @@
+# Environment for processing and preprocessing EEG datasets
+# This script creates a Conda environment called "bci_workstation" with Python 3.11.9
+# It then installs the required packages: scipy version 1.14 and mne (MNE-Python)
+# Make sure to run this script in your terminal to set up the environment.
+
+conda create --name bci_workstation python=3.11.9
+conda activate bci_workstation
+conda install -c conda-forge scipy=1.14
+conda install --channel conda-forge --strict-channel-priority mne
+pip install pandas
