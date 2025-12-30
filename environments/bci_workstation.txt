@@ -8,3 +8,5 @@ conda activate bci_workstation
 conda install -c conda-forge scipy=1.14
 conda install --channel conda-forge --strict-channel-priority mne
 pip install pandas
+pip install PyQt6
+conda install matplotlib
