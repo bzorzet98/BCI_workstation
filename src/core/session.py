@@ -1,4 +1,5 @@
-import json
+import numpy as np
+import mne
 from src.preprocessing import EEGPreprocessor
 
 class SessionState:
@@ -10,6 +11,9 @@ class SessionState:
         # Data
         self.current_data = None 
         self.original_data = None # CHECKPOINT: The clean loaded data
+        
+        self.cached_events = None
+        self.cached_event_id = None
         
         # Metadata
         self.dataset_name = None
@@ -49,6 +53,10 @@ class SessionState:
         self.history = []
         self.pipeline = {"raw_pipeline": [], "epoching": None, "epoch_pipeline": []}
         
+        # Clear cache when new data loads
+        self.cached_events = None
+        self.cached_event_id = None
+        
         print(f"Session started: {ds_name} | Sub {sub_id} | {ctx}")
         
     def run_transform(self, step_config):
@@ -77,6 +85,36 @@ class SessionState:
             print(f"Transform '{step_name}' failed: {e}")
             return False
 
+    
+
+    def get_events(self):
+        """
+        Centralized event extraction.
+        Returns:
+            events (np.ndarray): The MNE events array (N, 3).
+            event_id (dict): Mapping {Label: ID}.
+        """
+        # Return cached if available
+        if self.cached_events is not None:
+            return self.cached_events, self.cached_event_id
+
+        if not self.current_data:
+            return np.array([]), {}
+
+        # 1. Try Annotations (Preferred)
+        if isinstance(self.current_data, mne.io.BaseRaw):
+            events = mne.find_events(self.current_data, stim_channel='stim', verbose=False)
+            unique_ids = np.unique(events[:, 2])
+            event_id = {str(uid): int(uid) for uid in unique_ids}
+        elif isinstance(self.current_data, mne.Epochs):
+            events = self.current_data.events
+            event_id = self.current_data.event_id
+            
+        # Cache results
+        self.cached_events = events
+        self.cached_event_id = event_id
+        return events, event_id
+    
     def reset_pipeline(self):
         """
         Reverts data to the original state loaded from disk.

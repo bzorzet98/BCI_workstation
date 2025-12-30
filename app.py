@@ -3,20 +3,20 @@ import os
 from src.interface.bciworkstation import BCIWorkstationGUI
 from PyQt6.QtWidgets import QApplication
 from src.interface.themes import STYLESHEET_ACADEMIC, STYLESHEET_CYBERPUNK, STYLESHEET_CLINICAL
-from matplotlib.pyplot import plt
+import matplotlib.pyplot as plt
 
 theme_kwargs = {
-    "STYLESHEET_ACADEMIC":{
+    "STYLESHEET_CLINICAL":{
         "pyplot_style":{
-            "figure.facecolor": "#2b2d30",
-            "axes.facecolor": "#1e1f22",
-            "axes.edgecolor": "#4e5154",
-            "axes.labelcolor": "#cfd8dc",
-            "axes.prop_cycle": plt.cycler(color=['#589df6', '#81b1ff', '#4db6ac', '#ff8a65', '#a1887f']),
-            "xtick.color": "#cfd8dc",
-            "ytick.color": "#cfd8dc",
-            "grid.color": "#2b2d30",
-            "text.color": "#cfd8dc"
+            "figure.facecolor": "#f5f7f9",
+            "axes.facecolor": "#ffffff",
+            "axes.edgecolor": "#d1d9e0",
+            "axes.labelcolor": "#333333",
+            "axes.prop_cycle": plt.cycler(color=['#0078d4', '#d13438', '#107c10', '#5c2d91', '#008272']),
+            "xtick.color": "#333333",
+            "ytick.color": "#333333",
+            "grid.color": "#e1e4e8",
+            "text.color": "#333333"
         },
         "logo_path": os.path.join("src", "interface", "logo", "logo_system.png")
     },
@@ -58,9 +58,9 @@ if __name__ == "__main__":
     app.setStyle("Fusion")
     
     # 2. Apply your chosen stylesheet
-    app.setStyleSheet(STYLESHEET_ACADEMIC) 
+    app.setStyleSheet(STYLESHEET_CLINICAL) 
     
-    window = BCIWorkstationGUI(style_kwargs=theme_kwargs["STYLESHEET_ACADEMIC"])
+    window = BCIWorkstationGUI(style_kwargs=theme_kwargs["STYLESHEET_CLINICAL"])
     window.show()
     sys.exit(app.exec())
     
