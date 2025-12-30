@@ -19,6 +19,7 @@ from src.interface.widgets.info_tab import InfoTab
 from src.interface.widgets.preprocessing_tabs import ProcessingTab
 from src.interface.widgets.viz_tabs import VizTab # Import VizTab too
 from src.interface.widgets.log_console import LogConsole
+from src.interface.widgets.time_tab import TimeDomainTab
 
 # --- MAIN WINDOW ---
 # Add LogConsole if you implemented it
@@ -61,7 +62,7 @@ class BCIWorkstationGUI(QMainWindow):
         else:
             pyplot_style = style_kwargs.get("pyplot_style", None)
             logo_path = style_kwargs.get("logo_path", None)
-            
+        self.style_kwargs = pyplot_style
         try:
             # Replace 'assets/lab_logo.png' with your actual path
             # Creating a dummy pixmap if you don't have one yet to verify layout
@@ -143,6 +144,8 @@ class BCIWorkstationGUI(QMainWindow):
         self.tab_info = InfoTab(self.session, self.data_manager)
         self.tab_chans = ChannelTab(self.session)
         self.tab_proc = ProcessingTab(self.session)
+        self.tab_time = TimeDomainTab(self.session, self.style_kwargs)
+        
         self.tab_viz = VizTab(self.session)
 
         self.tab_proc.stepApplied.connect(self.refresh_gui)
@@ -151,6 +154,7 @@ class BCIWorkstationGUI(QMainWindow):
         self.tabs.addTab(self.tab_chans, "Channels")
         self.tabs.addTab(self.tab_proc, "Preprocessing")
         self.tabs.addTab(self.tab_viz, "Visualization")
+        self.tabs.addTab(self.tab_time, "Time Domain")
 
         # Add Sidebar and Tabs to Top Layout
         top_layout.addWidget(w_side)
@@ -204,9 +208,12 @@ class BCIWorkstationGUI(QMainWindow):
                 self.session.extra_info = extra
                 
                 self.session.load_data(raw, self.cb_dataset.currentText(), self.sb_subject.value(), self.cb_context.currentText())
-                
+
                 self.refresh_gui()
                 self.tabs.setCurrentIndex(0)
+                
+                # If using specialized tab:
+                self.tab_time.refresh()
             else:
                 QMessageBox.warning(self, "Load Failed", "No data found.")
         except Exception as e:
