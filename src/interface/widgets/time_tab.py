@@ -5,8 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QScrollBar, QSpinBox, QCheckBox, QPushButton, 
-                             QSizePolicy, QGroupBox, QScrollArea, QFrame)
+                             QScrollBar, QSpinBox, QCheckBox, QPushButton, QSizePolicy)
 from PyQt6.QtCore import Qt
 
 class TimeDomainTab(QWidget):
@@ -16,201 +15,157 @@ class TimeDomainTab(QWidget):
         
         # --- STYLE PARSING ---
         self.style_kwargs = style_kwargs or {}
+        styles = self.style_kwargs
         
-        self.c_bg = self.style_kwargs.get("figure.facecolor", "#2b2d30")
-        self.c_ax = self.style_kwargs.get("axes.facecolor", "#1e1f22")
-        self.c_spine = self.style_kwargs.get("axes.edgecolor", "#4e5154")
-        self.c_text = self.style_kwargs.get("text.color", "#cfd8dc")
-        self.c_line = self.style_kwargs.get("lines.color", self.c_text)
+        self.c_bg = styles.get("figure.facecolor", "#2b2d30")
+        self.c_ax = styles.get("axes.facecolor", "#1e1f22")
+        self.c_text = styles.get("text.color", "#cfd8dc")
+        self.c_spine = styles.get("axes.edgecolor", "#4e5154")
         
-        # Colors for events (cycle through standard matplotlib colors)
-        self.event_colors = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f', '#9b59b6', '#e67e22']
+        self.event_colors = ['#e74c3c', '#f1c40f', '#2ecc71', '#9b59b6', '#3498db', '#e67e22']
 
-        plt.rcParams.update(self.style_kwargs)
+        # --- RECURSION GUARD ---
+        self._updating = False
 
-        self.layout = QVBoxLayout()
-        self.setLayout(self.layout)
+        # --- LAYOUT SETUP ---
+        self.main_layout = QVBoxLayout(self) 
 
-        # --- TOP CONTROLS ---
+        # --- 1. TOP CONTROLS ---
         h_controls = QHBoxLayout()
         h_controls.setContentsMargins(0, 0, 0, 0)
         
-        # 1. Window (Time)
         h_controls.addWidget(QLabel("Window (s):"))
         self.sb_window = QSpinBox()
-        self.sb_window.setRange(1, 60)
+        self.sb_window.setRange(1, 500)
         self.sb_window.setValue(10)
-        self.sb_window.valueChanged.connect(self.refresh_scroll_range)
+        self.sb_window.valueChanged.connect(self.on_param_change)
         h_controls.addWidget(self.sb_window)
         
-        # 2. Scale (uV)
+        h_controls.addWidget(QLabel("Ch Visible:"))
+        self.sb_n_chans = QSpinBox()
+        self.sb_n_chans.setRange(1, 300)
+        self.sb_n_chans.setValue(5) 
+        self.sb_n_chans.valueChanged.connect(self.on_param_change)
+        h_controls.addWidget(self.sb_n_chans)
+        
         h_controls.addWidget(QLabel("Scale (uV):"))
         self.sb_scale = QSpinBox()
-        self.sb_scale.setRange(10, 5000)
-        self.sb_scale.setSingleStep(10)
-        self.sb_scale.setValue(50) 
+        self.sb_scale.setRange(10, 20000)
+        self.sb_scale.setSingleStep(100)
+        self.sb_scale.setValue(2000)
         self.sb_scale.valueChanged.connect(self.update_plot)
         h_controls.addWidget(self.sb_scale)
         
-        # 3. N Channels (Vertical Viewport)
-        h_controls.addWidget(QLabel("N Channels:"))
-        self.sb_n_chans = QSpinBox()
-        self.sb_n_chans.setRange(1, 128)
-        self.sb_n_chans.setValue(20) # Default show 20 channels
-        self.sb_n_chans.valueChanged.connect(self.refresh_scroll_range)
-        h_controls.addWidget(self.sb_n_chans)
-
-        # 4. Events Panel (Scrollable Horizontal Box)
-        # We put this inside a GroupBox to organize it
-        grp_ev = QGroupBox("Events")
-        grp_ev.setStyleSheet(f"color: {self.c_text}; border: 1px solid {self.c_spine}; margin-top: 0px;")
-        layout_ev = QHBoxLayout()
-        layout_ev.setContentsMargins(2, 2, 2, 2)
-        grp_ev.setLayout(layout_ev)
+        self.chk_events = QCheckBox("Show Events")
+        self.chk_events.setChecked(True)
+        self.chk_events.stateChanged.connect(self.update_plot)
+        h_controls.addWidget(self.chk_events)
         
-        # Scroll area for event checkboxes
-        self.scroll_events = QScrollArea()
-        self.scroll_events.setWidgetResizable(True)
-        self.scroll_events.setFixedHeight(40) # Compact height
-        self.scroll_events.setStyleSheet("background: transparent; border: none;")
-        self.w_events_container = QWidget()
-        self.layout_events_container = QHBoxLayout()
-        self.layout_events_container.setContentsMargins(0,0,0,0)
-        self.w_events_container.setLayout(self.layout_events_container)
-        self.scroll_events.setWidget(self.w_events_container)
-        
-        layout_ev.addWidget(self.scroll_events)
-        h_controls.addWidget(grp_ev)
-        
+        # Coordinate Label
         h_controls.addStretch()
-        self.layout.addLayout(h_controls)
-
-        # --- MIDDLE AREA (Plot + V Scroll) ---
-        h_middle = QHBoxLayout()
+        self.lbl_coords = QLabel("t=0.00s")
+        self.lbl_coords.setStyleSheet(f"font-weight: bold; color: {self.c_text};")
+        h_controls.addWidget(self.lbl_coords)
         
-        # Canvas
+        self.main_layout.addLayout(h_controls)
+
+        # --- 2. MIDDLE AREA (Scrollbar LEFT + Canvas) ---
+        h_middle = QHBoxLayout()
+        h_middle.setContentsMargins(0,0,0,0)
+        
+        # A. Vertical Scrollbar (LEFT)
+        self.v_scrollbar = QScrollBar(Qt.Orientation.Vertical)
+        self.v_scrollbar.setRange(0, 0) 
+        self.v_scrollbar.valueChanged.connect(self.on_v_scroll) # Changed to custom slot
+        h_middle.addWidget(self.v_scrollbar)
+        
+        # B. Canvas (RIGHT)
         self.figure = Figure(facecolor=self.c_bg)
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        h_middle.addWidget(self.canvas)
+        
+        self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
         
         self.ax = self.figure.add_subplot(111)
         self.ax.set_facecolor(self.c_ax)
-        # Hide standard spines
         self.ax.spines['top'].set_visible(False)
         self.ax.spines['right'].set_visible(False)
-        self.ax.spines['left'].set_visible(False)
         self.ax.spines['bottom'].set_color(self.c_spine)
+        self.ax.spines['left'].set_visible(False)
         self.ax.tick_params(axis='x', colors=self.c_text)
         self.ax.set_yticks([]) 
         
-        h_middle.addWidget(self.canvas)
-        
-        # Vertical Scrollbar (Channels)
-        self.v_scrollbar = QScrollBar(Qt.Orientation.Vertical)
-        self.v_scrollbar.valueChanged.connect(self.update_plot)
-        h_middle.addWidget(self.v_scrollbar)
-        
-        self.layout.addLayout(h_middle)
+        self.main_layout.addLayout(h_middle)
 
-        # --- BOTTOM AREA (Time Scroll) ---
+        # --- 3. BOTTOM AREA (Time Scrollbar) ---
         self.h_scrollbar = QScrollBar(Qt.Orientation.Horizontal)
         self.h_scrollbar.setRange(0, 100)
         self.h_scrollbar.valueChanged.connect(self.on_h_scroll)
         self.h_scrollbar.sliderMoved.connect(self.on_h_scroll)
-        self.layout.addWidget(self.h_scrollbar)
+        self.main_layout.addWidget(self.h_scrollbar)
         
-        # State
         self.current_start_time = 0.0
-        self.event_checkboxes = {} # {event_id: (QCheckBox, color_hex)}
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        self.refresh()
+    # --- EVENT HANDLERS ---
+
+    def on_mouse_move(self, event):
+        if event.inaxes == self.ax:
+            time = event.xdata
+            if time is not None:
+                self.lbl_coords.setText(f"t={time:.3f} s")
+        else:
+            self.lbl_coords.setText("")
 
     def refresh(self):
-        """Re-scan data, populate events, reset ranges."""
-        self.populate_event_checkboxes()
+        """Called externally to reset state."""
         self.refresh_scroll_range()
         self.update_plot()
 
-    def populate_event_checkboxes(self):
-        """Scans Raw object for events and creates dynamic checkboxes."""
-        # Clear old
-        while self.layout_events_container.count():
-            item = self.layout_events_container.takeAt(0)
-            if item.widget(): item.widget().deleteLater()
-        self.event_checkboxes = {}
-        
-        if not self.session.current_data: return
-        data_obj = self.session.current_data
-        
-        # Only for Raw currently
-        if not isinstance(data_obj, mne.io.BaseRaw): return
-        
-        try:
-            # Get unique event IDs present in the file
-            events, event_id_map = mne.events_from_annotations(data_obj, verbose=False)
-            unique_ids = np.unique(events[:, 2])
-            
-            # Invert map: ID -> Label
-            id_to_label = {v: k for k, v in event_id_map.items()}
-            
-            for i, ev_id in enumerate(unique_ids):
-                label = id_to_label.get(ev_id, str(ev_id))
-                color = self.event_colors[i % len(self.event_colors)]
-                
-                # Create Checkbox
-                chk = QCheckBox(label)
-                chk.setChecked(True)
-                # Color the text to match the event line
-                chk.setStyleSheet(f"color: {color}; font-weight: bold;")
-                chk.stateChanged.connect(self.update_plot)
-                
-                self.layout_events_container.addWidget(chk)
-                
-                # Store reference
-                self.event_checkboxes[ev_id] = (chk, color)
-                
-            self.layout_events_container.addStretch()
-            
-        except Exception:
-            pass
-
     def on_param_change(self):
+        """Called when spinboxes change."""
         self.refresh_scroll_range()
+        self.update_plot()
+
+    def on_v_scroll(self, value):
+        """Called when vertical scrollbar moves."""
+        if self._updating: return
         self.update_plot()
 
     def on_h_scroll(self, value):
+        """Called when horizontal scrollbar moves."""
+        if self._updating: return
         self.current_start_time = float(value)
         self.update_plot()
 
     def refresh_scroll_range(self):
-        """Updates limits for both Time and Channel scrollbars."""
+        """Calculates limits for BOTH scrollbars."""
         if not self.session.current_data: return
         
-        self.h_scrollbar.blockSignals(True)
-        self.v_scrollbar.blockSignals(True)
+        # Enable Guard
+        self._updating = True
         
         try:
             # 1. TIME LIMITS
-            if isinstance(self.session.current_data, mne.io.BaseRaw):
-                duration = self.session.current_data.times[-1]
+            data_obj = self.session.current_data
+            if isinstance(data_obj, mne.io.BaseRaw):
+                duration = data_obj.times[-1]
             else:
                 duration = 10 
             
             win_size = self.sb_window.value()
             max_h = int(max(0, duration - win_size))
             
-            # Clamp value if window grew
-            if self.h_scrollbar.value() > max_h:
+            # Clamp value
+            current_h = self.h_scrollbar.value()
+            if current_h > max_h:
                 self.h_scrollbar.setValue(max_h)
                 self.current_start_time = float(max_h)
-                
+            
             self.h_scrollbar.setRange(0, max_h)
             self.h_scrollbar.setPageStep(int(win_size))
             
             # 2. CHANNEL LIMITS
-            # Get valid list of channels (All or Selection)
             all_picks = self.session.selected_channels
             if not all_picks:
                 all_picks = self.session.current_data.ch_names
@@ -220,47 +175,51 @@ class TimeDomainTab(QWidget):
             
             max_v = max(0, n_total - n_visible)
             
-            if self.v_scrollbar.value() > max_v:
+            current_v = self.v_scrollbar.value()
+            if current_v > max_v:
                 self.v_scrollbar.setValue(max_v)
                 
             self.v_scrollbar.setRange(0, max_v)
-            self.v_scrollbar.setPageStep(1) # Scroll 1 channel at a time
+            self.v_scrollbar.setPageStep(1)
             
         finally:
-            self.h_scrollbar.blockSignals(False)
-            self.v_scrollbar.blockSignals(False)
-            
-        self.update_plot()
+            # Disable Guard
+            self._updating = False
 
     def update_plot(self):
-        """Main Drawing Logic with 2D Slicing."""
-        # --- GUARDS ---
+        """Main Drawing Logic."""
+        if self._updating: return # Prevent recursion
         if not self.session.current_data: return
         
-        # 1. Determine Channel Set (Full List)
+        # 1. Channel Logic
         all_picks = self.session.selected_channels
-        if not all_picks: 
-            all_picks = self.session.current_data.ch_names
+        data_obj = self.session.current_data
+        
+        if not all_picks:
+            all_picks = data_obj.ch_names
             
         if not all_picks:
             self.ax.clear()
             self.canvas.draw()
             return
 
-        # 2. Slice Channels (Vertical Viewport)
+        # 2. Viewport Slicing
         start_ch_idx = self.v_scrollbar.value()
         n_vis = self.sb_n_chans.value()
-        # Safe slicing
         end_ch_idx = min(start_ch_idx + n_vis, len(all_picks))
-        visible_picks = all_picks[start_ch_idx : end_ch_idx]
+        valid_picks = all_picks[start_ch_idx : end_ch_idx]
         
-        if not visible_picks: return
+        # Validate existence
+        valid_picks = [c for c in valid_picks if c in data_obj.ch_names]
+        
+        if not valid_picks:
+            self.ax.clear()
+            self.canvas.draw()
+            return
 
-        # 3. Slice Time (Horizontal Viewport)
+        # 3. Time Slicing
         start_t = self.current_start_time
         stop_t = start_t + self.sb_window.value()
-        
-        data_obj = self.session.current_data
         
         try:
             if isinstance(data_obj, mne.io.BaseRaw):
@@ -269,24 +228,23 @@ class TimeDomainTab(QWidget):
                 stop_samp = int(stop_t * sfreq)
                 stop_samp = min(stop_samp, data_obj.n_times)
                 
-                # Fetch Data
-                data, times = data_obj.get_data(
-                    picks=visible_picks,
-                    start=start_samp,
-                    stop=stop_samp,
+                segment, times = data_obj.get_data(
+                    picks=valid_picks,
+                    start=start_samp, 
+                    stop=stop_samp, 
                     return_times=True
                 )
             else:
-                return
-        except:
+                return 
+        except Exception:
             return
 
-        if data.shape[1] == 0: return
+        if segment.shape[1] == 0: return
 
-        # --- DRAWING ---
+        # 4. PLOTTING
         self.ax.clear()
         
-        # Re-apply styles after clear
+        # Reset Styles
         self.ax.set_facecolor(self.c_ax)
         self.figure.patch.set_facecolor(self.c_bg)
         self.ax.spines['bottom'].set_color(self.c_spine)
@@ -297,55 +255,54 @@ class TimeDomainTab(QWidget):
         self.ax.set_yticks([]) 
         self.ax.set_xlabel("Time (s)", color=self.c_text)
 
-        # Plot Signals
-        n_channels = len(visible_picks)
+        n_channels = len(valid_picks)
         scale_uv = self.sb_scale.value()
         scale_v = scale_uv * 1e-6
         
+        # Offsets
         offsets = np.arange(n_channels) * scale_v
-        offsets = offsets[::-1] # Top channel first
+        offsets = offsets[::-1]
+        
+        prop_cycle = plt.rcParams['axes.prop_cycle']
+        colors = prop_cycle.by_key()['color']
         
         for i in range(n_channels):
-            # Center trace
-            trace = data[i] - np.mean(data[i])
-            self.ax.plot(times, trace + offsets[i], color=self.c_line, lw=0.8)
+            trace = segment[i] - np.mean(segment[i])
+            line_color = colors[i % len(colors)]
+            
+            self.ax.plot(times, trace + offsets[i], color=line_color, lw=0.8)
             
             # Label
-            self.ax.text(start_t, offsets[i], f" {visible_picks[i]}", 
-                         color=self.c_text, fontsize=9, va='center', fontweight='bold')
+            self.ax.text(start_t, offsets[i], f" {valid_picks[i]}", 
+                         color=line_color, 
+                         fontsize=9, va='center', fontweight='bold')
 
-        # Plot Events
-        if isinstance(data_obj, mne.io.BaseRaw):
-            # We fetch all events, then filter by time AND checkbox state
-            events, _ = mne.events_from_annotations(data_obj, verbose=False)
+        # 5. Events
+        if self.chk_events.isChecked() and isinstance(data_obj, mne.io.BaseRaw):
+            events, event_id_dict = self.session.obtain_events()
             
-            # Time filter
-            mask_time = (events[:, 0] >= start_samp) & (events[:, 0] <= stop_samp)
-            local_events = events[mask_time]
-            
-            for ev in local_events:
-                ev_id = ev[2]
+            if len(events) > 0:
+                mask = (events[:, 0] >= start_samp) & (events[:, 0] <= stop_samp)
+                visible_events = events[mask]
+                id_to_label = {v: k for k, v in event_id_dict.items()}
                 
-                # Check if this event ID exists in our UI map and is Checked
-                if ev_id in self.event_checkboxes:
-                    chk, color = self.event_checkboxes[ev_id]
+                for ev in visible_events:
+                    sample = ev[0]
+                    ev_id = ev[2]
+                    t_ev = sample / sfreq
+                    label = id_to_label.get(ev_id, str(ev_id))
+                    color = self.event_colors[ev_id % len(self.event_colors)]
                     
-                    if chk.isChecked():
-                        ev_t = ev[0] / sfreq
-                        
-                        # Draw line
-                        self.ax.axvline(x=ev_t, color=color, linestyle='--', alpha=0.8, lw=1.5)
-                        
-                        # Draw Label (at top of plot)
-                        top_y = offsets[0] + scale_v if len(offsets)>0 else 0
-                        label_text = chk.text() # Get text from checkbox
-                        self.ax.text(ev_t, top_y, label_text, color=color, 
-                                     rotation=90, va='bottom', fontsize=8)
+                    self.ax.axvline(x=t_ev, color=color, linestyle='--', alpha=0.9, lw=1.5)
+                    
+                    top_y = offsets[0] + scale_v if len(offsets) > 0 else 0
+                    self.ax.text(t_ev, top_y, label, 
+                            color=color, rotation=90, va='bottom', fontsize=10, fontweight='bold')
 
-        # Limits
+        # 6. Limits
         self.ax.set_xlim(times[0], times[-1])
         if len(offsets) > 0:
-            self.ax.set_ylim(offsets[-1] - scale_v, offsets[0] + scale_v)
-            
+            self.ax.set_ylim(offsets[-1] - scale_v, offsets[0] + scale_v * 1.5) 
+
         self.figure.tight_layout()
         self.canvas.draw()

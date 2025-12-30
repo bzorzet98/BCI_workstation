@@ -15,7 +15,9 @@ from src.core.session import SessionState
 # --- WIDGET IMPORTS ---
 # Make sure these paths are correct based on your file structure
 from src.interface.widgets.channel_tab import ChannelTab
-from src.interface.widgets.info_tab import InfoTab
+from src.interface.widgets.info_tab import DatasetInfoTab # Renamed
+from src.interface.widgets.metadata_tab import SubjectMetadataTab # New
+from src.interface.widgets.freq_tab import FreqDomainTab # New
 from src.interface.widgets.preprocessing_tabs import ProcessingTab
 from src.interface.widgets.viz_tabs import VizTab # Import VizTab too
 from src.interface.widgets.log_console import LogConsole
@@ -85,8 +87,6 @@ class BCIWorkstationGUI(QMainWindow):
         # Add logo to layout FIRST
         sidebar_layout.addWidget(self.logo_label)
 
-        # 1. Data Selection Group (Existing)
-        grp_load = QGroupBox("Data Loading")
         # 1. Data Selection
         grp_load = QGroupBox("Data Loading")
         form_load = QFormLayout()
@@ -140,21 +140,24 @@ class BCIWorkstationGUI(QMainWindow):
         self.tabs = QTabWidget()
         
         self.tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        
         # Instantiate Tabs
-        self.tab_info = InfoTab(self.session, self.data_manager)
+        self.tab_info = DatasetInfoTab(self.session, self.data_manager)
+        self.tab_meta = SubjectMetadataTab(self.session, self.data_manager, self.style_kwargs)
         self.tab_chans = ChannelTab(self.session)
         self.tab_proc = ProcessingTab(self.session)
         self.tab_time = TimeDomainTab(self.session, self.style_kwargs)
+        self.tab_freq = FreqDomainTab(self.session, self.style_kwargs) # New
         
-        self.tab_viz = VizTab(self.session)
-
-        self.tab_proc.stepApplied.connect(self.refresh_gui)
-        
-        self.tabs.addTab(self.tab_info, "Info / Metadata")
+        # Add Tabs
+        self.tabs.addTab(self.tab_info, "Dataset Info")
+        self.tabs.addTab(self.tab_meta, "Demographics")
         self.tabs.addTab(self.tab_chans, "Channels")
         self.tabs.addTab(self.tab_proc, "Preprocessing")
-        self.tabs.addTab(self.tab_viz, "Visualization")
         self.tabs.addTab(self.tab_time, "Time Domain")
+        self.tabs.addTab(self.tab_freq, "Frequency Domain")
+
+        self.tab_proc.stepApplied.connect(self.refresh_gui)
 
         # Add Sidebar and Tabs to Top Layout
         top_layout.addWidget(w_side)
@@ -167,6 +170,7 @@ class BCIWorkstationGUI(QMainWindow):
         # BOTTOM AREA: Log Console
         # ==========================================
         grp_console = QGroupBox("Execution Log")
+        grp_console.setMinimumHeight(150) 
         v_cons = QVBoxLayout()
         self.console = LogConsole() # Requires src/interface/widgets/log_console.py
         v_cons.addWidget(self.console)
@@ -222,9 +226,13 @@ class BCIWorkstationGUI(QMainWindow):
     def refresh_gui(self):
         """Central method to update all UI elements after a data change."""
         self.refresh_history()
+        # Refresh the new split tabs
         self.tab_info.refresh()
+        self.tab_meta.refresh()
         self.tab_chans.refresh()
         self.tab_proc.refresh_options()
+        self.tab_time.refresh()
+        self.tab_freq.refresh()
 
     def refresh_history(self):
         self.list_history.clear()

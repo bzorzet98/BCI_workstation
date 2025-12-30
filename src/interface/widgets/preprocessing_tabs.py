@@ -154,40 +154,50 @@ class ProcessingTab(QWidget):
     def apply_step(self):
         if not self.session.current_data: return
         
-        # 1. Parse Arguments
-        kwargs = {}
+        # 1. Parse Arguments from GUI
+        collected_args = {}
+        
         for arg, le in self.inputs.items():
             txt = le.text()
-            try: kwargs[arg] = ast.literal_eval(txt)
-            except: kwargs[arg] = txt
+            try: 
+                # Parse literals: "1.0" -> 1.0, "{'a':1}" -> {'a':1}
+                val = ast.literal_eval(txt)
+            except: 
+                # Fallback to string if eval fails
+                val = txt
             
-        target_stage = self.combo_stage.currentText()
+            collected_args[arg] = val
+            
+        # 2. UNPACK 'kwargs' (The Fix)
+        # If the user typed specific extra args into the 'kwargs' box, we merge them up.
+        if 'kwargs' in collected_args:
+            extra_args = collected_args.pop('kwargs') # Remove the nested dict
+            
+            if isinstance(extra_args, dict):
+                # Merge: extra_args overwrite specific args if conflict
+                collected_args.update(extra_args)
+            elif extra_args is None or extra_args == "None":
+                pass # Do nothing
+            else:
+                print(f"Warning: 'kwargs' field must be a dictionary. Got {type(extra_args)}")
+
         step_data = self.combo_steps.currentData()
+        target_stage = self.combo_stage.currentText()
         
-        # 2. Construct Configuration
-        if target_stage == "epoching":
-            # FORCE correct config for Worker
-            step_config = {
-                "type": "class",
-                "name": "Epochs",
-                "module_name": "mne",
-                "kwargs": kwargs,
-                "pipeline_stage": "epoching"
-            }
-        else:
-            # Standard config
-            step_config = {
-                "type": step_data['type'],
-                "name": step_data['name'],
-                "module_name": "src.preprocessing.preprocessing_functions" if step_data['type']=='function' else None,
-                "kwargs": kwargs,
-                "pipeline_stage": target_stage
-            }
+        # 3. Build Config
+        # Now 'collected_args' contains flat parameters like 'pad_before' AND 'constant_values'
+        step_config = {
+            "type": step_data['type'],
+            "name": step_data['name'],
+            "module_name": "src.preprocessing.preprocessing_functions" if step_data['type']=='function' else None,
+            "kwargs": collected_args, # Pass the flattened dictionary
+            "pipeline_stage": target_stage
+        }
         
-        # 3. Execute
+        # 4. Run
         success = self.session.run_transform(step_config)
         if success:
             self.stepApplied.emit()
-            self.refresh_options() # Refresh in case type changed (Raw -> Epochs)
+            self.refresh_options()
         else:
             QMessageBox.warning(self, "Error", "Transform failed.")

@@ -72,13 +72,18 @@ class Registry:
             # Filter out internal arguments we don't want the user to touch
             if param_name in ['self', 'raw', 'events', 'epochs', 'data', 'inst']: 
                 continue 
-                
-            val = param.default if param.default is not inspect.Parameter.empty else None
             
-            # --- OVERRIDE DEFAULTS FOR GUI CONVENIENCE ---
-            if name == 'Epochs' and param_name == 'preload':
-                val = True
-                
+            # HANDLE **kwargs
+            if param.kind == inspect.Parameter.VAR_KEYWORD:
+                # We name it 'kwargs' explicitly so the GUI knows what it is
+                defaults['kwargs'] = {} 
+                continue
+            
+            # HANDLE *args (usually skippable for GUI, but can default to empty tuple)
+            if param.kind == inspect.Parameter.VAR_POSITIONAL:
+                continue
+
+            val = param.default if param.default is not inspect.Parameter.empty else None
             defaults[param_name] = val
             
         return defaults
