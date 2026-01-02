@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout,
                              QSpinBox, QListWidget, QGroupBox, 
                              QFormLayout, QMessageBox, QTabWidget,
                              QFileDialog, QDialog, QDialogButtonBox, QLabel, QLineEdit, QSizePolicy,
-                             ) # Added QSizePolicy for canvas
+                             QApplication) # Added QSizePolicy for canvas
 from PyQt6.QtCore import QTimer ,Qt
 from PyQt6.QtGui import QPixmap
 import os
@@ -135,6 +135,10 @@ class BCIWorkstationGUI(QMainWindow):
         btn_export = QPushButton("Export Pipeline JSON")
         btn_export.clicked.connect(self.export_pipeline_dialog)
         sidebar_layout.addWidget(btn_export)
+        
+        btn_import = QPushButton("Import & Run Pipeline")
+        btn_import.clicked.connect(self.import_pipeline_dialog)
+        sidebar_layout.addWidget(btn_import)
 
         # --- RIGHT TABS ---
         self.tabs = QTabWidget()
@@ -274,6 +278,33 @@ class BCIWorkstationGUI(QMainWindow):
             prep_name = le_name.text()
             desc = le_desc.text()
             self.save_pipeline_json(prep_name, desc)
+            
+    def import_pipeline_dialog(self):
+        """Opens file dialog to load a pipeline JSON."""
+        if not self.session.current_data:
+            QMessageBox.warning(self, "Warning", "Please load a dataset first.")
+            return
+
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Pipeline JSON",
+            "", # Current dir
+            "JSON Files (*.json)"
+        )
+        
+        if filename:
+            # Show a loading cursor because this might take time
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            
+            success = self.session.load_pipeline_from_json(filename)
+            
+            QApplication.restoreOverrideCursor()
+            
+            if success:
+                self.refresh_gui()
+                QMessageBox.information(self, "Success", "Pipeline applied successfully.")
+            else:
+                QMessageBox.critical(self, "Error", "Pipeline execution failed. Check logs.")
 
     def save_pipeline_json(self, name, description):
         """Constructs the final JSON and saves to file."""

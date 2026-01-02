@@ -1,5 +1,6 @@
 import numpy as np
 import mne
+import json
 from src.preprocessing import EEGPreprocessor
 
 class SessionState:
@@ -134,7 +135,65 @@ class SessionState:
         self.history = []
         self.pipeline = {"raw_pipeline": [], "epoching": None, "epoch_pipeline": []}
         return True
+    
+    def load_pipeline_from_json(self, file_path):
+        """
+        Loads a JSON file and applies the pipeline steps to the current data.
+        """
+        if self.current_data is None:
+            print("Error: No data loaded. Cannot apply pipeline.")
+            return False
 
+        try:
+            with open(file_path, 'r') as f:
+                config = json.load(f)
+            
+            # Extract the pipeline dict
+            # Handle both formats: full config output vs just the pipeline dict
+            if 'preprocessing_pipeline' in config:
+                pipeline = config['preprocessing_pipeline']
+            else:
+                # Assume the file IS the pipeline dict
+                pipeline = config
+            
+            print(f"Loading Pipeline: {config.get('preprocessing_name', 'Unnamed')}")
+
+            # 1. Apply Raw Steps
+            raw_steps = pipeline.get('raw_pipeline', [])
+            for step in raw_steps:
+                # Ensure the stage tag is correct for history
+                step['pipeline_stage'] = 'raw_pipeline'
+                if not self.run_transform(step):
+                    print("Pipeline stopped due to error in raw step.")
+                    return False
+
+            # 2. Apply Epoching
+            epoch_step = pipeline.get('epoching')
+            if epoch_step:
+                # Epoching is usually a dict in the config
+                # Sometimes it might be wrapped in a list in custom JSONs, handle both
+                if isinstance(epoch_step, list) and len(epoch_step) > 0:
+                    epoch_step = epoch_step[0]
+                
+                epoch_step['pipeline_stage'] = 'epoching'
+                if not self.run_transform(epoch_step):
+                    print("Pipeline stopped due to error in epoching.")
+                    return False
+
+            # 3. Apply Epoch Pipeline
+            epoch_pipe = pipeline.get('epoch_pipeline', [])
+            for step in epoch_pipe:
+                step['pipeline_stage'] = 'epoch_pipeline'
+                if not self.run_transform(step):
+                    print("Pipeline stopped due to error in epoch step.")
+                    return False
+            
+            return True
+
+        except Exception as e:
+            print(f"Failed to load pipeline: {e}")
+            return False
+        
     def undo_last_step(self):
         """
         Removes the last step and re-calculates state.
