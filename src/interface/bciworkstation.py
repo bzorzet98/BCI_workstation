@@ -19,9 +19,10 @@ from src.interface.widgets.info_tab import DatasetInfoTab # Renamed
 from src.interface.widgets.metadata_tab import SubjectMetadataTab # New
 from src.interface.widgets.freq_tab import FreqDomainTab # New
 from src.interface.widgets.preprocessing_tabs import ProcessingTab
-from src.interface.widgets.viz_tabs import VizTab # Import VizTab too
+
 from src.interface.widgets.log_console import LogConsole
 from src.interface.widgets.time_tab import TimeDomainTab
+from src.interface.widgets.eda_tab import EDATab 
 
 # --- MAIN WINDOW ---
 # Add LogConsole if you implemented it
@@ -152,6 +153,7 @@ class BCIWorkstationGUI(QMainWindow):
         self.tab_proc = ProcessingTab(self.session)
         self.tab_time = TimeDomainTab(self.session, self.style_kwargs)
         self.tab_freq = FreqDomainTab(self.session, self.style_kwargs) # New
+        self.tab_eda = EDATab(self.session, self.style_kwargs) # New
         
         # Add Tabs
         self.tabs.addTab(self.tab_info, "Dataset Info")
@@ -160,6 +162,7 @@ class BCIWorkstationGUI(QMainWindow):
         self.tabs.addTab(self.tab_proc, "Preprocessing")
         self.tabs.addTab(self.tab_time, "Time Domain")
         self.tabs.addTab(self.tab_freq, "Frequency Domain")
+        self.tabs.addTab(self.tab_eda, "EDA Diagnostic") # New
 
         self.tab_proc.stepApplied.connect(self.refresh_gui)
 

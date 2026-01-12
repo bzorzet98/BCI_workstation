@@ -67,66 +67,93 @@ class FreqDomainTab(QWidget):
     def update_plot(self):
         if not self.session.current_data: return
         
-        # 1. Prepare Data & Selection
+        # 1. Prepare Selection
         data_obj = self.session.current_data
         picks = self.session.selected_channels
         
         if not picks: 
-            picks = data_obj.ch_names[:5] # Default to first 5 if all are selected to avoid clutter
+            picks = data_obj.ch_names[:5] 
             
         valid_picks = [c for c in picks if c in data_obj.ch_names]
-        if not valid_picks: return
+        if not valid_picks: 
+            self.figure.clear()
+            self.canvas.draw()
+            return
 
-        # 2. Compute PSD
-        fmin = self.sb_fmin.value()
-        fmax = self.sb_fmax.value()
-        method = self.cb_method.currentText()
-        
+        # 2. Setup Plot
         self.figure.clear()
         ax = self.figure.add_subplot(111)
+        # ... (Styling code same as before) ...
         ax.set_facecolor(self.c_ax)
-        
-        # Styling
         ax.spines['bottom'].set_color(self.c_spine)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.spines['left'].set_color(self.c_spine)
         ax.tick_params(colors=self.c_text)
         ax.set_xlabel("Frequency (Hz)", color=self.c_text)
-        ax.set_ylabel("Power Spectral Density", color=self.c_text)
         ax.grid(True, linestyle='--', alpha=0.3, color=self.c_spine)
+        
+        ylabel = "Power Spectral Density"
 
         try:
-            # Create a copy to pick channels before computing (saves RAM)
-            # Or pass picks to compute_psd if supported (MNE 1.0+)
-            spectrum = data_obj.compute_psd(method=method, fmin=fmin, fmax=fmax, picks=valid_picks)
+            fmin = self.sb_fmin.value()
+            fmax = self.sb_fmax.value()
+            method = self.cb_method.currentText()
+
+            # --- STEP A: Compute ---
+            # We calculate PSD ONLY for the selected channels.
+            spectrum = data_obj.compute_psd(
+                method=method, 
+                fmin=fmin, 
+                fmax=fmax, 
+                picks=valid_picks, 
+                verbose=False
+            )
             
-            # Get data: (n_channels, n_freqs) for Raw, or (n_epochs, n_ch, n_freqs) for Epochs
-            psd_data, freqs = spectrum.get_data(return_freqs=True)
+            # --- STEP B: Extract Data (THE FIX) ---
+            # We must ask for 'all' to avoid MNE filtering out EMG/EOG again.
+            # Since 'spectrum' only contains 'valid_picks' now, 'all' returns exactly what we want.
+            # Using picks=None defaults to "data_or_ica", which causes the crash for EMG.
+            psd_data, freqs = spectrum.get_data(
+                picks='all',  # <--- CRITICAL FIX
+                return_freqs=True
+            )
             
-            # If Epochs, average over epochs
+            # Handling Dimensions
+            # Raw: (n_ch, n_freqs)
+            # Epochs: (n_epochs, n_ch, n_freqs) -> Average over epochs
             if psd_data.ndim == 3:
                 psd_data = psd_data.mean(axis=0)
                 
-            # Convert to dB
+            # dB Conversion
             if self.chk_db.isChecked():
-                psd_data = 10 * np.log10(psd_data)
-                ax.set_ylabel("Power (dB/Hz)", color=self.c_text)
+                psd_data = 10 * np.log10(np.maximum(psd_data, 1e-20))
+                ylabel = "Power (dB/Hz)"
 
-            # 3. Plot Loop
+            ax.set_ylabel(ylabel, color=self.c_text)
+
+            # --- STEP C: Plot ---
             prop_cycle = plt.rcParams['axes.prop_cycle']
             colors = prop_cycle.by_key()['color']
             
-            for i, ch_name in enumerate(valid_picks):
-                color = colors[i % len(colors)]
-                ax.plot(freqs, psd_data[i], color=color, label=ch_name, lw=1.5)
+            # We iterate over the *extracted* data size to be safe
+            n_ch_plotted = len(psd_data)
             
-            # Legend (Styled)
-            leg = ax.legend(loc='upper right', facecolor=self.c_ax, edgecolor=self.c_spine)
-            for text in leg.get_texts():
-                text.set_color(self.c_text)
+            # Note: valid_picks matches psd_data order because we computed using valid_picks
+            for i in range(n_ch_plotted):
+                color = colors[i % len(colors)]
+                # Use valid_picks[i] for label
+                label_name = valid_picks[i] if i < len(valid_picks) else f"Ch{i}"
+                
+                ax.plot(freqs, psd_data[i], color=color, label=label_name, lw=1.5, alpha=0.9)
+            
+            if len(valid_picks) <= 15:
+                leg = ax.legend(loc='upper right', facecolor=self.c_ax, edgecolor=self.c_spine)
+                for text in leg.get_texts():
+                    text.set_color(self.c_text)
 
         except Exception as e:
-            ax.text(0.5, 0.5, f"Error: {e}", color='red', ha='center')
+            # print(e) # Uncomment for debugging
+            ax.text(0.5, 0.5, f"Error: {str(e)}", color='red', ha='center', va='center', transform=ax.transAxes)
 
         self.canvas.draw()

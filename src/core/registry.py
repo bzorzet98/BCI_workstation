@@ -1,6 +1,7 @@
 import inspect
 import mne
 from src.preprocessing import preprocessing_functions
+from src.utils import import_class
 
 class Registry:
     """
@@ -40,7 +41,33 @@ class Registry:
         functions = [{'name': f, 'type': 'function'} for f in Registry.CUSTOM_FUNCTIONS]
         
         return methods + functions
-
+    
+    @staticmethod
+    def get_analyzer_params(class_name, module_path):
+        """
+        Inspecciona dinámicamente el __init__ de una clase para obtener
+        sus argumentos y valores por defecto.
+        """
+        try:
+            cls = import_class(class_name, module_path)
+            # Obtenemos la firma del método __init__
+            sig = inspect.signature(cls.__init__)
+            
+            params = {}
+            for name, param in sig.parameters.items():
+                # Ignoramos argumentos internos del sistema
+                if name in ['self', 'kwargs', 'args']:
+                    continue
+                
+                # Si no tiene valor por defecto, ponemos None
+                val = param.default if param.default is not inspect.Parameter.empty else None
+                params[name] = val
+                
+            return params
+        except Exception as e:
+            print(f"Error en Registry: {e}")
+            return {}
+        
     @staticmethod
     def get_defaults(name, step_type):
         """

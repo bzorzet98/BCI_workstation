@@ -152,6 +152,7 @@ class Cho2017(BaseEEGDataset):
     
     def _create_raw_task(self, eeg_data, context):
         ctx = 'imagery' if context == 'motor_imagery' else 'movement'
+        
         event = getattr(eeg_data, f'{ctx}_event')
         
         left = np.vstack([getattr(eeg_data, f'{ctx}_left') * self.unit_factor, event * self.event_id['left_hand']])

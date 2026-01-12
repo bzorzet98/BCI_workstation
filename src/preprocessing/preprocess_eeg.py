@@ -62,6 +62,7 @@ class EEGPreprocessor:
                 if 'events' not in kwargs:
                     # We reuse our robust event finder
                     events = self._obtain_events(data)
+                    module_name = "mne"
                     kwargs['events'] = events
                     if len(events) == 0:
                         raise ValueError("No events found in data. Cannot epoch.")
