@@ -1,6 +1,9 @@
 import inspect
+import os
 import mne
 from src.preprocessing import preprocessing_functions
+import pkgutil
+import importlib
 from src.utils import import_class
 
 class Registry:
@@ -67,7 +70,37 @@ class Registry:
         except Exception as e:
             print(f"Error en Registry: {e}")
             return {}
+    
+    @staticmethod
+    def discover_eda_analyzers():
+        """
+        Escanea la carpeta src/eda/analyzers y devuelve un diccionario
+        con las clases encontradas {NombreClase: RutaModulo}.
+        """
+        analyzers = {}
+        # Ruta física de la carpeta de analizadores
+        pkg_path = os.path.join("src", "eda", "analyzers")
         
+        if not os.path.exists(pkg_path):
+            return analyzers
+
+        # pkgutil recorre todos los archivos .py de la carpeta
+        for loader, module_name, is_pkg in pkgutil.iter_modules([pkg_path]):
+            if module_name in ["base_analyzer", "__init__"]: 
+                continue # Saltamos la base y el init
+            
+            # Importamos el módulo dinámicamente
+            full_module_path = f"src.eda.analyzers.{module_name}"
+            module = importlib.import_module(full_module_path)
+            
+            # Buscamos clases dentro del módulo
+            for name, obj in inspect.getmembers(module, inspect.isclass):
+                # Verificamos que la clase esté definida en ese archivo 
+                # y no sea una importada (como BaseAnalyzer)
+                if obj.__module__ == full_module_path:
+                    analyzers[name] = full_module_path
+                    
+        return analyzers
     @staticmethod
     def get_defaults(name, step_type):
         """

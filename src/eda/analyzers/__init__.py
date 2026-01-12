@@ -1,2 +1,3 @@
 from .base_analyzer import BaseAnalyzer
 from .falseMI_analyzer import FalseMIAnalyzer
+from .epoch_stability_analyzer import EpochStabilityAnalyzer

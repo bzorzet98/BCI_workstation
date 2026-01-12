@@ -94,27 +94,29 @@ class FalseMIAnalyzer(BaseAnalyzer):
 
         # Bad Trials
         bad_trials = np.where(mask_ratio | mask_burst)[0].tolist()
-        
+        channel_visuals = {
+                            "Variance Ratio": {ch: ratios_per_ch[:, i].tolist() for i, ch in enumerate(self.picks)},
+                            "Peak Amplitude (uV)": {ch: peaks_per_ch[:, i].tolist() for i, ch in enumerate(self.picks)}
+                        }
+
+        # 2. En el etiquetado, incluimos explícitamente el nombre del canal
         trial_tags = []
         for i in range(len(max_ratios)):
             tags = []
-            if mask_ratio[i]:
-                ch_name = self.picks[worst_ch_idx_ratio[i]]
-                tags.append(f"false_mi_high_variance_{ch_name}")
-            if mask_burst[i]:
-                ch_name = self.picks[worst_ch_idx_peak[i]]
-                tags.append(f"false_mi_burst_{ch_name}")
-            # Check if tags is not empty before appending
-            if tags:
-                trial_tags.append(tags) 
+            # Buscamos qué canales específicos superaron el umbral en este trial
+            ch_ratio_fail = np.where(ratios_per_ch[i, :] > self.threshold_ratio)[0]
+            ch_peak_fail = np.where(peaks_per_ch[i, :] > self.threshold_amplitude_uv)[0]
+            
+            for c_idx in ch_ratio_fail:
+                tags.append(f"{self.picks[c_idx]}: High Var")
+            for c_idx in ch_peak_fail:
+                tags.append(f"{self.picks[c_idx]}: Burst")
+            trial_tags.append(tags)
             
         # --- 4. Final Dictionary Construction ---
         return {
                 "summary": f"Analysis Completed.\nMarked Trials: {np.sum(mask_ratio | mask_burst)}",
-                "visuals": {
-                    "max_variance_ratios": max_ratios.tolist(),
-                    "max_peak_amplitudes_uv": max_peaks.tolist()
-                },
+                "visuals": channel_visuals,
                 "artifacts": {
                     "bad_trials": bad_trials,
                     "tags": trial_tags,

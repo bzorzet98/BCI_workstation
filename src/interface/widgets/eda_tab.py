@@ -1,7 +1,7 @@
 import ast
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QComboBox, QPushButton, QScrollArea, QLineEdit, 
-                             QFormLayout, QTextEdit, QFrame, QTabWidget, QListWidget)
+                             QFormLayout, QTextEdit, QFrame, QTabWidget, QListWidget, QApplication)
 from PyQt6.QtCore import Qt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -44,11 +44,17 @@ class EDATab(QTabWidget): # Ahora el Tab mismo es un contenedor de pestañas
         # Selector de función
         f_select = QFormLayout()
         self.combo_analyzer = QComboBox()
-        self.combo_analyzer.addItem("FalseMIAnalyzer", userData="src.eda.analyzers.falseMI_analyzer")
-        self.combo_analyzer.currentIndexChanged.connect(self.on_analyzer_changed)
-        f_select.addRow("Analizador:", self.combo_analyzer)
-        params_layout.addLayout(f_select)
+        self.available_analyzers = Registry.discover_eda_analyzers()
         
+        for name, path in self.available_analyzers.items():
+            self.combo_analyzer.addItem(name, userData=path)
+        # ---------------------------------
+
+        self.combo_analyzer.currentIndexChanged.connect(self.on_analyzer_changed)
+        f_select.addRow("<b>Seleccionar Función EDA:</b>", self.combo_analyzer)
+        params_layout.addLayout(f_select)
+
+
         # Formulario de parámetros (Estilo Preprocessing)
         self.scroll_config = QScrollArea()
         self.scroll_config.setWidgetResizable(True)
@@ -84,11 +90,17 @@ class EDATab(QTabWidget): # Ahora el Tab mismo es un contenedor de pestañas
         plot_container = QWidget()
         p_vbox = QVBoxLayout(plot_container)
         h_ctrl = QHBoxLayout()
-        self.cb_plot_type = QComboBox()
-        self.cb_plot_type.currentIndexChanged.connect(self.update_canvas)
-        h_ctrl.addWidget(QLabel("Ver Distribución:"))
-        h_ctrl.addWidget(self.cb_plot_type)
+        self.cb_metric_selector = QComboBox()
+        self.cb_channel_selector = QComboBox() 
+        self.cb_metric_selector.currentIndexChanged.connect(self.update_plot_selections)
+        self.cb_channel_selector.currentIndexChanged.connect(self.update_canvas)
+
+        h_ctrl.addWidget(QLabel("Métrica:"))
+        h_ctrl.addWidget(self.cb_metric_selector)
+        h_ctrl.addWidget(QLabel("Canal:"))
+        h_ctrl.addWidget(self.cb_channel_selector)
         h_ctrl.addStretch()
+
         p_vbox.addLayout(h_ctrl)
         
         self.figure = Figure(facecolor=self.c_bg, tight_layout=True)
@@ -107,6 +119,19 @@ class EDATab(QTabWidget): # Ahora el Tab mismo es un contenedor de pestañas
         self.inputs = {}
         self.history_data = [] # Guardará los reportes realizados
         self.on_analyzer_changed()
+
+    def update_plot_selections(self):
+        """Cuando cambia la métrica, actualizamos la lista de canales disponibles."""
+        if not hasattr(self, 'last_report'): return
+        metric = self.cb_metric_selector.currentText()
+        channels = list(self.last_report['visuals'][metric].keys())
+        
+        self.cb_channel_selector.blockSignals(True)
+        self.cb_channel_selector.clear()
+        self.cb_channel_selector.addItem("Todos los canales") # Opción para superponer
+        self.cb_channel_selector.addItems(channels)
+        self.cb_channel_selector.blockSignals(False)
+        self.update_canvas()
 
     def on_analyzer_changed(self):
         """Genera los campos basándose en el analizados seleccionado."""
@@ -128,76 +153,108 @@ class EDATab(QTabWidget): # Ahora el Tab mismo es un contenedor de pestañas
             self.inputs[arg] = le
 
     def run_analysis(self):
-        if not self.session.current_data: return
+        if not self.session.current_data:
+            self.txt_report.setText("Error: No hay datos cargados en la sesión.")
+            return
 
-        # 1. Parsear Kwargs
-        kwargs = {}
-        for arg, le in self.inputs.items():
-            try: kwargs[arg] = ast.literal_eval(le.text())
-            except: kwargs[arg] = le.text()
-
-        # 2. Ejecutar
+        # 1. Mostrar cursor de carga (Feedback al usuario)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        
         try:
+            # 2. Parsear Argumentos desde la interfaz
+            kwargs = {}
+            for arg, le in self.inputs.items():
+                try:
+                    # ast.literal_eval convierte "[1, 2]" en una lista real de Python
+                    kwargs[arg] = ast.literal_eval(le.text())
+                except:
+                    kwargs[arg] = le.text()
+
+            # 3. Importar e Instanciar el Analizador
             name = self.combo_analyzer.currentText()
             path = self.combo_analyzer.currentData()
             Cls = import_class(name, path)
-            analyzer = Cls(**kwargs)
+            
+            # Limpiamos kwargs de 'picks' por si acaso y pasamos los canales de la sesión
+            kwargs.pop('picks', None)
+            analyzer = Cls(picks=self.session.selected_channels, **kwargs)
+            
+            # 4. EJECUTAR EL ANÁLISIS
             report = analyzer.analyze(self.session.current_data)
             
-            # 3. Guardar en Historial
-            run_name = f"{name} - {len(self.history_data) + 1}"
+            # 5. GUARDAR RESULTADOS
+            # En la sesión global (para que el TimeDomainTab lo vea)
+            self.session.eda_report = report
+            
+            # En el historial local de esta pestaña
+            run_name = f"{name} - {self.list_history.count() + 1}"
             self.history_data.append({'name': run_name, 'report': report})
             self.list_history.addItem(run_name)
             
-            # 4. Mostrar y saltar a pestaña de resultados
+            # 6. ACTUALIZAR INTERFAZ
             self.show_results(report)
-            self.setCurrentIndex(1) 
+            self.setCurrentIndex(1) # Cambiar a la pestaña de resultados
+            
+            # 7. FORZAR REFRESCO GLOBAL (Sincronización de pestañas)
+            # Buscamos la ventana principal para llamar a su refresh_gui
+            main_win = self.window() # Obtiene la QMainWindow directamente
+            if hasattr(main_win, 'refresh_gui'):
+                main_win.refresh_gui()
+                
         except Exception as e:
-            self.txt_report.setText(f"Error: {e}")
+            # En caso de error, mostramos el mensaje en el reporte
+            error_msg = f"ERROR DURANTE EL ANÁLISIS ({name}):\n{str(e)}"
+            self.txt_report.setText(error_msg)
             self.setCurrentIndex(1)
+            print(f"DEBUG: {error_msg}") # También por consola para desarrollo
             
-        try:
-            # (Ejecución del analizados...)
-            report = analyzer.analyze(self.session.current_data)
-            
-            # Guardamos en la sesión
-            self.session.eda_report = report
-            
-            # ACTUALIZAMOS LA UI
-            self.show_results(report)
-            self.setCurrentIndex(1) # Ir a resultados
-            
-            # --- TRUCO: Forzar refresco de otras pestañas ---
-            # Si el widget padre tiene el método refresh_gui, lo llamamos
-            # Generalmente en tu BCIWorkstationGUI.py tienes esta función
-            if hasattr(self.parentWidget(), 'refresh_gui'):
-                self.parentWidget().refresh_gui()
-        except Exception as e:
-            self.txt_report.setText(f"Error durante el análisis: {e}")
-            self.setCurrentIndex(1)
-            
+        finally:
+            # Restaurar el cursor normal pase lo que pase
+            QApplication.restoreOverrideCursor()
+                
     def show_results(self, report):
+        """Puebla los datos en las pestañas correspondientes."""
         self.last_report = report
         self.session.eda_report = report 
-        self.txt_report.setText(report.get('summary', ""))
+
+        # 1. Pestaña Resumen
+        self.txt_report.setText(report.get('summary', "Análisis completado."))
+
+        # 2. Pestaña Plots: Llenamos las MÉTRICAS disponibles
+        self.cb_metric_selector.blockSignals(True)
+        self.cb_metric_selector.clear()
         
-        self.cb_plot_type.blockSignals(True)
-        self.cb_plot_type.clear()
         visuals = report.get('visuals', {})
-        self.cb_plot_type.addItems(list(visuals.keys()))
-        self.cb_plot_type.blockSignals(False)
-        self.update_canvas()
+        if visuals:
+            # Llenamos con "Variance Ratio", "Peak Amplitude", etc.
+            self.cb_metric_selector.addItems(list(visuals.keys()))
+        
+        self.cb_metric_selector.blockSignals(False)
+
+        # Disparamos la actualización de canales para la primera métrica
+        self.update_plot_selections()
 
     def update_canvas(self):
-        if not hasattr(self, 'last_report'): return
-        key = self.cb_plot_type.currentText()
-        data = self.last_report.get('visuals', {}).get(key, [])
+        # ... lógica de dibujo ...
+        metric = self.cb_metric_selector.currentText()
+        target_ch = self.cb_channel_selector.currentText()
+        visuals = self.last_report['visuals'][metric]
+
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         ax.set_facecolor(self.c_ax)
-        ax.hist(data, bins=30, color='#589df6', alpha=0.8)
-        ax.set_title(key, color=self.c_text)
-        ax.tick_params(colors=self.c_text)
+
+        if target_ch == "Todos los canales":
+            # Superponemos histogramas con transparencia
+            for ch, data in visuals.items():
+                ax.hist(data, bins=30, alpha=0.5, label=ch)
+            ax.legend(fontsize=8, facecolor=self.c_ax, labelcolor=self.c_text)
+        else:
+            # Mostramos solo el canal seleccionado
+            data = visuals[target_ch]
+            ax.hist(data, bins=30, color='#589df6', edgecolor='white')
+            ax.set_title(f"{metric} - Canal: {target_ch}", color=self.c_text)
+
         self.canvas.draw()
 
     def load_from_history(self, item):
