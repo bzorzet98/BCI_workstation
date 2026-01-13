@@ -1,286 +1,191 @@
 import re
 import mne
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
-                             QScrollArea, QCheckBox, QGridLayout, QLabel, QFrame, QGroupBox)
+                             QScrollArea, QCheckBox, QGridLayout, QLabel, 
+                             QFrame, QGroupBox)
 from PyQt6.QtCore import Qt
 
 class ChannelTab(QWidget):
-    def __init__(self, session):
+    def __init__(self, session, style_kwargs=None):
         super().__init__()
         self.session = session
-        self.layout = QVBoxLayout()
-        self.setLayout(self.layout)
+        self.style_kwargs = style_kwargs or {}
         
-        # --- 1. Global Controls ---
-        grp_global = QGroupBox("Global Selection")
-        h_global = QHBoxLayout()
+        # Internal State
+        self.checkboxes = {} # Map: ch_name -> QCheckBox
         
-        # Global Controls
-        btn_all = QPushButton("All")
-        btn_none = QPushButton("None")
-        btn_eeg = QPushButton("EEG Only")
-        btn_left = QPushButton("Left (Odd)")
-        btn_right = QPushButton("Right (Even)")
-        btn_center = QPushButton("Center (z)")
-        
-        # Connections using Toggle Logic
-        btn_all.clicked.connect(self.select_all)
-        btn_none.clicked.connect(self.select_none)
-        
-        # EEG Only is special (usually exclusive selection), 
-        # but if you want it to toggle, you can adapt it. 
-        # For now, "Select EEG Only" usually implies unchecking others, so keep as is:
-        btn_eeg.clicked.connect(self.select_eeg) 
-        
-        # Smart Toggles for Topology
-        btn_left.clicked.connect(lambda: self.toggle_by_condition(lambda ch: self.is_left(ch)))
-        btn_right.clicked.connect(lambda: self.toggle_by_condition(lambda ch: self.is_right(ch)))
-        btn_center.clicked.connect(lambda: self.toggle_by_condition(lambda ch: 'z' in ch.lower()))
-        
-        h_global.addWidget(btn_all)
-        h_global.addWidget(btn_none)
-        h_global.addWidget(btn_eeg)
-        h_global.addWidget(btn_left)
-        h_global.addWidget(btn_right)
-        h_global.addWidget(btn_center)
-        grp_global.setLayout(h_global)
-        self.layout.addWidget(grp_global)
-        
-        # --- 2. Row Selection Controls ---
-        # Buttons to select specific anatomical rows
-        grp_rows = QGroupBox("Anatomical Rows")
-        self.row_layout = QHBoxLayout() # Will be populated dynamically
-        grp_rows.setLayout(self.row_layout)
-        self.layout.addWidget(grp_rows)
+        self._init_ui()
 
-        # --- 3. Channel Grid (Scrollable) ---
+    def _init_ui(self):
+        """Initializes the main structural layout."""
+        self.main_layout = QVBoxLayout(self)
+
+        # 1. Global Controls (Top)
+        self.main_layout.addWidget(self._create_global_controls())
+        
+        # 2. Row Selection Buttons (Middle)
+        self.grp_rows = QGroupBox("Anatomical Row Selection")
+        self.row_layout = QHBoxLayout(self.grp_rows)
+        self.main_layout.addWidget(self.grp_rows)
+
+        # 3. Channel Grid (Bottom - Scrollable)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet("background-color: #f8f9fa; border: 1px solid #dee2e6;")
         
-        self.chk_container = QWidget()
-        # We use a Grid where: Col 0 = Label, Col 1..N = Checkboxes
-        self.grid_layout = QGridLayout() 
-        self.chk_container.setLayout(self.grid_layout)
+        self.grid_container = QWidget()
+        self.grid_layout = QGridLayout(self.grid_container)
+        self.scroll.setWidget(self.grid_container)
         
-        self.scroll.setWidget(self.chk_container)
-        self.layout.addWidget(self.scroll)
-        
-        self.checkboxes = {} # Map name -> QCheckBox
+        self.main_layout.addWidget(self.scroll)
 
-    # --- LOGIC HELPERS ---
-    
-    def get_anatomical_row(self, ch_name):
-        """
-        Parses channel name to find its row.
-        """
-        ch = ch_name.upper()
-        
-        # Non-EEG types
-        if 'EOG' in ch: return 'EOG'
-        if 'EMG' in ch: return 'EMG'
-        if 'STIM' in ch: return 'STIM'
-        
-        # Remove 'z' (midline) and numbers to find the base code
-        # Example: 'Fz' -> 'F', 'FCz' -> 'FC', 'F3' -> 'F'
-        base = ''.join([c for c in ch if c.isalpha() and c != 'Z'])
-        
-        # If the channel was JUST 'z' (rare) or stripping resulted in empty, handle it
-        if not base and 'Z' in ch: 
-            # Fallback logic if needed, but usually Fz becomes F
-            pass
+    def _create_global_controls(self):
+        """Creates the master toggle buttons."""
+        grp = QGroupBox("Master Selection")
+        layout = QHBoxLayout(grp)
 
-        # Map specific bases to rows
-        if base == 'FP': return 'Fp'
-        if base == 'AF': return 'AF'
-        if base == 'F':  return 'F'
-        if base in ['FT', 'FC']: return 'FT/FC'
-        if base in ['T', 'C']:   return 'T/C'
-        if base in ['TP', 'CP']: return 'TP/CP'
-        if base == 'P':  return 'P'
-        if base == 'PO': return 'PO'
-        if base == 'O':  return 'O'
-        if base == 'I':  return 'I'
+        btns = {
+            "All": self._select_all,
+            "None": self._select_none,
+            "EEG Only": self._select_eeg_only,
+            "Left (Odd)": lambda: self._toggle_by_condition(self._is_left),
+            "Right (Even)": lambda: self._toggle_by_condition(self._is_right),
+            "Midline (z)": lambda: self._toggle_by_condition(lambda ch: 'z' in ch.lower())
+        }
+
+        for text, func in btns.items():
+            btn = QPushButton(text)
+            btn.clicked.connect(func)
+            layout.addWidget(btn)
         
-        return 'Other'
+        return grp
 
-    def is_left(self, ch_name):
-        # Odd numbers are left
-        nums = re.findall(r'\d+', ch_name)
-        if nums:
-            return int(nums[0]) % 2 != 0
-        return False
-
-    def is_right(self, ch_name):
-        # Even numbers are right
-        nums = re.findall(r'\d+', ch_name)
-        if nums:
-            return int(nums[0]) % 2 == 0
-        return False
-
-    # --- REFRESH LOGIC ---
+    # --- PUBLIC API ---
 
     def refresh(self):
-        """Builds the anatomically sorted grid."""
-        # 1. Cleanup
-        for i in reversed(range(self.grid_layout.count())): 
-            w = self.grid_layout.itemAt(i).widget()
-            if w: w.setParent(None)
-        
-        for i in reversed(range(self.row_layout.count())):
-            w = self.row_layout.itemAt(i).widget()
-            if w: w.setParent(None)
-            
-        self.checkboxes = {}
-
-        if not self.session.current_data:
-            return
+        """Rebuilds the anatomical grid based on current session data."""
+        self._clear_ui()
+        if not self.session.current_data: return
 
         ch_names = self.session.current_data.ch_names
         
-        # 2. Categorize Channels
+        # 1. Sort channels into anatomical rows
         rows_order = ['Fp', 'AF', 'F', 'FT/FC', 'T/C', 'TP/CP', 'P', 'PO', 'O', 'I', 'EOG', 'EMG', 'Other']
         categorized = {r: [] for r in rows_order}
         
         for ch in ch_names:
-            row = self.get_anatomical_row(ch)
-            if row in categorized:
-                categorized[row].append(ch)
-            else:
-                categorized['Other'].append(ch)
+            row = self._parse_anatomical_row(ch)
+            categorized.get(row, categorized['Other']).append(ch)
 
-        # 3. Build UI Rows
+        # 2. Build UI Rows
         current_grid_row = 0
-        
-        for row_label in rows_order:
-            channels = categorized[row_label]
+        for row_label, channels in categorized.items():
             if not channels: continue
             
-            # A. Add "Select Row" Button to top bar
-            btn_row = QPushButton(row_label)
-            # CHANGE: Connect to toggle_list instead of select_list
-            btn_row.clicked.connect(lambda _, chs=channels: self.toggle_list(chs))
+            # Add Shortcut Button to the top panel
+            btn = QPushButton(row_label)
+            btn.clicked.connect(lambda _, chs=channels: self._toggle_list(chs))
+            self.row_layout.addWidget(btn)
             
-            self.row_layout.addWidget(btn_row)
-            
-            # B. Add Label to Grid
+            # Add Row Label to Grid
             lbl = QLabel(f"<b>{row_label}</b>")
-            lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            lbl.setStyleSheet("color: #495057; border-bottom: 1px solid #dee2e6;")
             self.grid_layout.addWidget(lbl, current_grid_row, 0)
             
-            # C. Add Checkboxes
-            col_idx = 1
-            MAX_COLS = 8 
-            
+            # Add Checkboxes
+            col = 1
             for ch in channels:
                 chk = QCheckBox(ch)
-                chk.setChecked(True) 
-                chk.stateChanged.connect(self.update_session_selection)
+                chk.setChecked(True)
+                chk.stateChanged.connect(self._update_session)
+                chk.setStyleSheet("color: #212529;")
                 
-                self.grid_layout.addWidget(chk, current_grid_row, col_idx)
+                self.grid_layout.addWidget(chk, current_grid_row, col)
                 self.checkboxes[ch] = chk
                 
-                col_idx += 1
-                if col_idx > MAX_COLS:
+                col += 1
+                if col > 8: # Wrap row if more than 8 channels in anatomical group
                     current_grid_row += 1
-                    col_idx = 1
+                    col = 1
             
             current_grid_row += 1
             
-        self.update_session_selection()
+        self._update_session()
 
-    # --- SELECTION SLOTS ---
-    def toggle_list(self, ch_names):
-        """
-        Smart Toggle Logic:
-        - If ALL are checked -> Uncheck all.
-        - Otherwise (if some or none are checked) -> Check all.
-        """
-        # 1. Determine current state
-        all_checked = True
-        for ch in ch_names:
-            if ch in self.checkboxes:
-                if not self.checkboxes[ch].isChecked():
-                    all_checked = False
-                    break
-        
-        # 2. Toggle target state
-        target_state = not all_checked  # If all checked, target is False. Else True.
-        
-        # 3. Apply
-        # We block signals briefly to prevent firing 'update_session' N times
-        self.blockSignals(True) 
-        for ch in ch_names:
-            if ch in self.checkboxes:
-                self.checkboxes[ch].setChecked(target_state)
-        self.blockSignals(False)
-        
-        # 4. Update session once at the end
-        self.update_session_selection()
-    
-    def toggle_by_condition(self, condition_func):
-        """
-        Toggles channels matching a condition (Left, Right, Center).
-        Logic: If ANY matching channel is unchecked -> Check ALL matching.
-               Else (all matching are checked) -> Uncheck ALL matching.
-        """
-        # 1. Identify target channels
-        target_chs = [ch for ch in self.checkboxes.keys() if condition_func(ch)]
-        
-        if not target_chs: return
+    # --- LOGIC & HELPERS ---
 
-        # 2. Determine current state of these channels
-        all_checked = True
-        for ch in target_chs:
-            if not self.checkboxes[ch].isChecked():
-                all_checked = False
-                break
+    def _toggle_list(self, ch_names):
+        """Smart Toggle: If all are checked, uncheck all. Otherwise, check all."""
+        all_checked = all(self.checkboxes[ch].isChecked() for ch in ch_names if ch in self.checkboxes)
+        target = not all_checked
         
-        # 3. Determine target state
-        target_state = not all_checked
-        
-        # 4. Apply
         self.blockSignals(True)
-        for ch in target_chs:
-            self.checkboxes[ch].setChecked(target_state)
-        self.blockSignals(False)
-        
-        self.update_session_selection()
-        
-    def update_session_selection(self):
-        selected = [ch for ch, box in self.checkboxes.items() if box.isChecked()]
-        self.session.selected_channels = selected 
-
-    def select_all(self):
-        for box in self.checkboxes.values(): box.setChecked(True)
-    
-    def select_none(self):
-        for box in self.checkboxes.values(): box.setChecked(False)
-
-    def select_list(self, ch_names):
-        """Selects only the channels in the provided list (additive or exclusive?)
-        Let's make it additive (check them, don't uncheck others).
-        To make it exclusive, uncheck all first. Let's do Toggle logic?
-        Standard UI: Buttons usually 'Select' (Check).
-        """
         for ch in ch_names:
-            if ch in self.checkboxes:
-                self.checkboxes[ch].setChecked(True)
+            if ch in self.checkboxes: self.checkboxes[ch].setChecked(target)
+        self.blockSignals(False)
+        self._update_session()
 
-    def select_by_condition(self, condition_func):
-        """Generic selector."""
-        for ch, box in self.checkboxes.items():
-            if condition_func(ch):
-                box.setChecked(True)
-            else:
-                box.setChecked(False) # Strict selection
+    def _toggle_by_condition(self, condition_func):
+        """Toggles a subset of channels based on a boolean function (e.g. is_left)."""
+        targets = [ch for ch in self.checkboxes.keys() if condition_func(ch)]
+        self._toggle_list(targets)
 
-    def select_eeg(self):
+    def _update_session(self):
+        """Synchronizes selected channels with the global session state."""
+        selected = [ch for ch, box in self.checkboxes.items() if box.isChecked()]
+        self.session.selected_channels = selected
+
+    def _parse_anatomical_row(self, ch_name):
+        """Determines the row category based on standard 10-20 naming."""
+        ch = ch_name.upper()
+        if 'EOG' in ch: return 'EOG'
+        if 'EMG' in ch: return 'EMG'
+        
+        # Strip numbers and 'Z' to find base row
+        base = ''.join([c for c in ch if c.isalpha() and c != 'Z'])
+        
+        mapping = {
+            'FP': 'Fp', 'AF': 'AF', 'F': 'F',
+            'FT': 'FT/FC', 'FC': 'FT/FC',
+            'T': 'T/C', 'C': 'T/C',
+            'TP': 'TP/CP', 'CP': 'TP/CP',
+            'P': 'P', 'PO': 'PO', 'O': 'O', 'I': 'I'
+        }
+        return mapping.get(base, 'Other')
+
+    def _is_left(self, name):
+        nums = re.findall(r'\d+', name)
+        return int(nums[0]) % 2 != 0 if nums else False
+
+    def _is_right(self, name):
+        nums = re.findall(r'\d+', name)
+        return int(nums[0]) % 2 == 0 if nums else False
+
+    # --- MASTER ACTIONS ---
+
+    def _select_all(self):
+        for b in self.checkboxes.values(): b.setChecked(True)
+
+    def _select_none(self):
+        for b in self.checkboxes.values(): b.setChecked(False)
+
+    def _select_eeg_only(self):
         if not self.session.current_data: return
-        # Uncheck all first
-        self.select_none()
+        self._select_none()
         try:
-            picks = mne.pick_types(self.session.current_data.info, eeg=True)
-            eeg_names = [self.session.current_data.ch_names[i] for i in picks]
-            self.select_list(eeg_names)
-        except:
-            pass
+            eeg_picks = mne.pick_types(self.session.current_data.info, eeg=True)
+            eeg_names = [self.session.current_data.ch_names[i] for i in eeg_picks]
+            self.blockSignals(True)
+            for name in eeg_names:
+                if name in self.checkboxes: self.checkboxes[name].setChecked(True)
+            self.blockSignals(False)
+            self._update_session()
+        except: pass
+
+    def _clear_ui(self):
+        """Cleans up widgets before a refresh."""
+        self.checkboxes = {}
+        for layout in [self.grid_layout, self.row_layout]:
+            while layout.count():
+                child = layout.takeAt(0)
+                if child.widget(): child.widget().deleteLater()

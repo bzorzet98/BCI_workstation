@@ -6,9 +6,12 @@ class DatasetInfoTab(QWidget):
         super().__init__()
         self.session = session
         self.data_manager = data_manager
+        self._init_ui()
+    
+    def _init_ui(self):
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
-        
+    
         # 1. Dataset General Info
         self.grp_general = QGroupBox("Dataset Technical Details")
         self.lbl_general = QLabel("No dataset loaded.")

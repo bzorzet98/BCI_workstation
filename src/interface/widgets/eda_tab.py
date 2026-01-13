@@ -1,61 +1,86 @@
 import ast
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QComboBox, QPushButton, QScrollArea, QLineEdit, 
-                             QFormLayout, QTextEdit, QFrame, QTabWidget, QListWidget, QApplication)
+                             QFormLayout, QTextEdit, QFrame, QTabWidget, 
+                             QListWidget, QApplication)
 from PyQt6.QtCore import Qt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from src.core.registry import Registry
 from src.utils.imports import import_class
 
-class EDATab(QTabWidget): # Ahora el Tab mismo es un contenedor de pestañas
+class EDATab(QTabWidget):
+    """
+    Exploratory Data Analysis Tab.
+    Provides a configuration panel for custom analyzers and a results panel
+    with automated reporting and visualization.
+    """
     def __init__(self, session, style_kwargs=None):
         super().__init__()
         self.session = session
         self.style_kwargs = style_kwargs or {}
         
-        # Estilos de plot (oscuro)
+        # --- AESTHETICS ---
         self.c_bg = self.style_kwargs.get("figure.facecolor", "#2b2d30")
         self.c_ax = self.style_kwargs.get("axes.facecolor", "#1e1f22")
         self.c_text = self.style_kwargs.get("text.color", "#cfd8dc")
         self.c_spine = self.style_kwargs.get("axes.edgecolor", "#4e5154")
 
-        self.init_ui()
+        # Data Persistence
+        self.inputs = {}
+        self.history_data = [] 
+        self.last_report = None
 
-    def init_ui(self):
-        # --- PESTAÑA 1: CONFIGURACIÓN Y SELECCIÓN ---
+        self._init_ui()
+
+    def _init_ui(self):
+        """Initializes the top-level tab structure."""
+        # 1. Configuration Tab
         self.tab_config = QWidget()
-        config_layout = QHBoxLayout(self.tab_config)
+        self._setup_config_layout()
         
-        # Columna Izquierda: Historial de EDA
+        # 2. Results Tab
+        self.tab_results = QWidget()
+        self._setup_results_layout()
+
+        self.addTab(self.tab_config, "EDA Configuration")
+        self.addTab(self.tab_results, "Diagnostic Results")
+        
+        # Initial population
+        self.on_analyzer_changed()
+
+    def _setup_config_layout(self):
+        """Builds the History sidebar and the Dynamic Parameter form."""
+        layout = QHBoxLayout(self.tab_config)
+        
+        # LEFT: History Panel
         hist_panel = QFrame()
         hist_panel.setFixedWidth(250)
         hist_vbox = QVBoxLayout(hist_panel)
-        hist_vbox.addWidget(QLabel("<b>Historial de Análisis:</b>"))
-        self.list_history = QListWidget()
-        self.list_history.itemClicked.connect(self.load_from_history)
-        hist_vbox.addWidget(self.list_history)
-        config_layout.addWidget(hist_panel)
+        hist_vbox.addWidget(QLabel("<b>Analysis History:</b>"))
         
-        # Columna Derecha: Selección y Parámetros (Estilo Preprocessing)
+        self.list_history = QListWidget()
+        self.list_history.itemClicked.connect(self._load_from_history)
+        hist_vbox.addWidget(self.list_history)
+        layout.addWidget(hist_panel)
+        
+        # RIGHT: Analyzer Setup
         params_panel = QWidget()
         params_layout = QVBoxLayout(params_panel)
         
-        # Selector de función
+        # Analyzer Selector
         f_select = QFormLayout()
         self.combo_analyzer = QComboBox()
-        self.available_analyzers = Registry.discover_eda_analyzers()
-        
-        for name, path in self.available_analyzers.items():
+        available = Registry.discover_eda_analyzers()
+        for name, path in available.items():
             self.combo_analyzer.addItem(name, userData=path)
-        # ---------------------------------
-
+        
         self.combo_analyzer.currentIndexChanged.connect(self.on_analyzer_changed)
-        f_select.addRow("<b>Seleccionar Función EDA:</b>", self.combo_analyzer)
+        f_select.addRow("<b>Target Analyzer:</b>", self.combo_analyzer)
         params_layout.addLayout(f_select)
 
-
-        # Formulario de parámetros (Estilo Preprocessing)
+        # Dynamic Kwargs Scroll Area
+        params_layout.addWidget(QLabel("<b>Parameter Configuration:</b>"))
         self.scroll_config = QScrollArea()
         self.scroll_config.setWidgetResizable(True)
         self.scroll_config.setStyleSheet("background-color: #f8f9fa; border: 1px solid #dee2e6;")
@@ -66,75 +91,56 @@ class EDATab(QTabWidget): # Ahora el Tab mismo es un contenedor de pestañas
         self.scroll_config.setWidget(self.form_widget)
         params_layout.addWidget(self.scroll_config)
         
-        self.btn_run = QPushButton("Ejecutar Análisis y Ver Resultados")
+        # Action Button
+        self.btn_run = QPushButton("Run Analysis & View Results")
         self.btn_run.setFixedHeight(45)
-        self.btn_run.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold;")
+        self.btn_run.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold; border-radius: 4px;")
         self.btn_run.clicked.connect(self.run_analysis)
         params_layout.addWidget(self.btn_run)
         
-        config_layout.addWidget(params_panel)
+        layout.addWidget(params_panel)
 
-        # --- PESTAÑA 2: RESULTADOS Y VISUALIZACIÓN ---
-        self.tab_results = QWidget()
-        results_layout = QVBoxLayout(self.tab_results)
-        
-        # Sub-pestañas para Reporte vs Plots
+    def _setup_results_layout(self):
+        """Builds the internal tabs for Text Summary and Visual Analytics."""
+        layout = QVBoxLayout(self.tab_results)
         self.inner_results = QTabWidget()
         
-        # Reporte
+        # 1. Text Summary
         self.txt_report = QTextEdit()
         self.txt_report.setReadOnly(True)
         self.txt_report.setStyleSheet(f"background-color: {self.c_ax}; color: {self.c_text}; font-family: monospace;")
         
-        # Plots
+        # 2. Visual Analytics
         plot_container = QWidget()
         p_vbox = QVBoxLayout(plot_container)
+        
+        # Selectors Bar
         h_ctrl = QHBoxLayout()
         self.cb_metric_selector = QComboBox()
         self.cb_channel_selector = QComboBox() 
-        self.cb_metric_selector.currentIndexChanged.connect(self.update_plot_selections)
+        self.cb_metric_selector.currentIndexChanged.connect(self._update_channel_options)
         self.cb_channel_selector.currentIndexChanged.connect(self.update_canvas)
 
-        h_ctrl.addWidget(QLabel("Métrica:"))
+        h_ctrl.addWidget(QLabel("Metric:"))
         h_ctrl.addWidget(self.cb_metric_selector)
-        h_ctrl.addWidget(QLabel("Canal:"))
+        h_ctrl.addWidget(QLabel("Channel:"))
         h_ctrl.addWidget(self.cb_channel_selector)
         h_ctrl.addStretch()
-
         p_vbox.addLayout(h_ctrl)
         
+        # Matplotlib Canvas
         self.figure = Figure(facecolor=self.c_bg, tight_layout=True)
         self.canvas = FigureCanvas(self.figure)
         p_vbox.addWidget(self.canvas)
         
-        self.inner_results.addTab(self.txt_report, "Resumen Texto")
-        self.inner_results.addTab(plot_container, "Gráficos")
-        
-        results_layout.addWidget(self.inner_results)
+        self.inner_results.addTab(self.txt_report, "Text Summary")
+        self.inner_results.addTab(plot_container, "Visual Analytics")
+        layout.addWidget(self.inner_results)
 
-        # Añadir al Tab principal
-        self.addTab(self.tab_config, "Configuración EDA")
-        self.addTab(self.tab_results, "Resultados")
-
-        self.inputs = {}
-        self.history_data = [] # Guardará los reportes realizados
-        self.on_analyzer_changed()
-
-    def update_plot_selections(self):
-        """Cuando cambia la métrica, actualizamos la lista de canales disponibles."""
-        if not hasattr(self, 'last_report'): return
-        metric = self.cb_metric_selector.currentText()
-        channels = list(self.last_report['visuals'][metric].keys())
-        
-        self.cb_channel_selector.blockSignals(True)
-        self.cb_channel_selector.clear()
-        self.cb_channel_selector.addItem("Todos los canales") # Opción para superponer
-        self.cb_channel_selector.addItems(channels)
-        self.cb_channel_selector.blockSignals(False)
-        self.update_canvas()
+    # --- LOGIC & EVENTS ---
 
     def on_analyzer_changed(self):
-        """Genera los campos basándose en el analizados seleccionado."""
+        """Rebuilds the parameter form when a new analyzer is selected."""
         while self.form_layout.count():
             item = self.form_layout.takeAt(0)
             if item.widget(): item.widget().deleteLater()
@@ -145,6 +151,8 @@ class EDATab(QTabWidget): # Ahora el Tab mismo es un contenedor de pestañas
         params = Registry.get_analyzer_params(name, path)
 
         for arg, val in params.items():
+            if arg in ['picks', 'self', 'kwargs', 'args']: continue
+            
             lbl = QLabel(arg)
             lbl.setStyleSheet("color: #333; font-weight: bold;")
             le = QLineEdit(str(val))
@@ -153,113 +161,112 @@ class EDATab(QTabWidget): # Ahora el Tab mismo es un contenedor de pestañas
             self.inputs[arg] = le
 
     def run_analysis(self):
+        """Instantiates and executes the selected analyzer on current session data."""
         if not self.session.current_data:
-            self.txt_report.setText("Error: No hay datos cargados en la sesión.")
+            self.txt_report.setText("Error: No data loaded in session.")
             return
 
-        # 1. Mostrar cursor de carga (Feedback al usuario)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         
         try:
-            # 2. Parsear Argumentos desde la interfaz
+            # 1. Parse Arguments
             kwargs = {}
             for arg, le in self.inputs.items():
-                try:
-                    # ast.literal_eval convierte "[1, 2]" en una lista real de Python
-                    kwargs[arg] = ast.literal_eval(le.text())
-                except:
-                    kwargs[arg] = le.text()
+                try: kwargs[arg] = ast.literal_eval(le.text())
+                except: kwargs[arg] = le.text()
 
-            # 3. Importar e Instanciar el Analizador
+            # 2. Instantiate and Analyze
             name = self.combo_analyzer.currentText()
             path = self.combo_analyzer.currentData()
             Cls = import_class(name, path)
             
-            # Limpiamos kwargs de 'picks' por si acaso y pasamos los canales de la sesión
             kwargs.pop('picks', None)
             analyzer = Cls(picks=self.session.selected_channels, **kwargs)
-            
-            # 4. EJECUTAR EL ANÁLISIS
             report = analyzer.analyze(self.session.current_data)
             
-            # 5. GUARDAR RESULTADOS
-            # En la sesión global (para que el TimeDomainTab lo vea)
+            # 3. Save results
             self.session.eda_report = report
-            
-            # En el historial local de esta pestaña
-            run_name = f"{name} - {self.list_history.count() + 1}"
+            run_name = f"{name} - Run #{self.list_history.count() + 1}"
             self.history_data.append({'name': run_name, 'report': report})
             self.list_history.addItem(run_name)
             
-            # 6. ACTUALIZAR INTERFAZ
+            # 4. Update UI
             self.show_results(report)
-            self.setCurrentIndex(1) # Cambiar a la pestaña de resultados
+            self.setCurrentIndex(1) # Jump to results tab
             
-            # 7. FORZAR REFRESCO GLOBAL (Sincronización de pestañas)
-            # Buscamos la ventana principal para llamar a su refresh_gui
-            main_win = self.window() # Obtiene la QMainWindow directamente
-            if hasattr(main_win, 'refresh_gui'):
-                main_win.refresh_gui()
+            # 5. Global Refresh
+            main_win = self.window()
+            if hasattr(main_win, 'refresh_gui'): main_win.refresh_gui()
                 
         except Exception as e:
-            # En caso de error, mostramos el mensaje en el reporte
-            error_msg = f"ERROR DURANTE EL ANÁLISIS ({name}):\n{str(e)}"
-            self.txt_report.setText(error_msg)
+            self.txt_report.setText(f"Analysis Error ({name}):\n{str(e)}")
             self.setCurrentIndex(1)
-            print(f"DEBUG: {error_msg}") # También por consola para desarrollo
             
         finally:
-            # Restaurar el cursor normal pase lo que pase
             QApplication.restoreOverrideCursor()
-                
+
     def show_results(self, report):
-        """Puebla los datos en las pestañas correspondientes."""
+        """Populates text and plot selectors with report data."""
         self.last_report = report
-        self.session.eda_report = report 
+        self.txt_report.setText(report.get('summary', "No summary provided."))
 
-        # 1. Pestaña Resumen
-        self.txt_report.setText(report.get('summary', "Análisis completado."))
-
-        # 2. Pestaña Plots: Llenamos las MÉTRICAS disponibles
+        # Update Metric Selector
         self.cb_metric_selector.blockSignals(True)
         self.cb_metric_selector.clear()
-        
         visuals = report.get('visuals', {})
         if visuals:
-            # Llenamos con "Variance Ratio", "Peak Amplitude", etc.
             self.cb_metric_selector.addItems(list(visuals.keys()))
-        
         self.cb_metric_selector.blockSignals(False)
 
-        # Disparamos la actualización de canales para la primera métrica
-        self.update_plot_selections()
+        self._update_channel_options()
+
+    def _update_channel_options(self):
+        """Updates channel list based on the currently selected metric."""
+        if not self.last_report: return
+        metric = self.cb_metric_selector.currentText()
+        if not metric: return
+
+        channels = list(self.last_report['visuals'].get(metric, {}).keys())
+        
+        self.cb_channel_selector.blockSignals(True)
+        self.cb_channel_selector.clear()
+        self.cb_channel_selector.addItem("All Channels (Overlay)")
+        self.cb_channel_selector.addItems(channels)
+        self.cb_channel_selector.blockSignals(False)
+        self.update_canvas()
 
     def update_canvas(self):
-        # ... lógica de dibujo ...
+        """Renders the selected metric/channel histogram."""
+        if not self.last_report: return
+        
         metric = self.cb_metric_selector.currentText()
         target_ch = self.cb_channel_selector.currentText()
-        visuals = self.last_report['visuals'][metric]
+        if not metric or not target_ch: return
+
+        visuals_data = self.last_report['visuals'].get(metric, {})
 
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         ax.set_facecolor(self.c_ax)
 
-        if target_ch == "Todos los canales":
-            # Superponemos histogramas con transparencia
-            for ch, data in visuals.items():
-                ax.hist(data, bins=30, alpha=0.5, label=ch)
+        if target_ch == "All Channels (Overlay)":
+            for ch, data in visuals_data.items():
+                ax.hist(data, bins=30, alpha=0.4, label=ch)
             ax.legend(fontsize=8, facecolor=self.c_ax, labelcolor=self.c_text)
+            ax.set_title(f"Global Distribution: {metric}", color=self.c_text)
         else:
-            # Mostramos solo el canal seleccionado
-            data = visuals[target_ch]
-            ax.hist(data, bins=30, color='#589df6', edgecolor='white')
-            ax.set_title(f"{metric} - Canal: {target_ch}", color=self.c_text)
+            data = visuals_data.get(target_ch, [])
+            ax.hist(data, bins=30, color='#589df6', edgecolor='white', alpha=0.8)
+            ax.set_title(f"{metric} - Channel: {target_ch}", color=self.c_text)
 
+        # Apply Styling
+        ax.tick_params(colors=self.c_text)
+        for spine in ax.spines.values(): spine.set_color(self.c_spine)
         self.canvas.draw()
 
-    def load_from_history(self, item):
-        """Permite volver a ver un análisis previo clicando en el historial."""
+    def _load_from_history(self, item):
+        """Retrieves and displays a previous run from the history list."""
         idx = self.list_history.row(item)
-        data = self.history_data[idx]
-        self.show_results(data['report'])
-        self.setCurrentIndex(1)
+        if idx < len(self.history_data):
+            self.show_results(self.history_data[idx]['report'])
+            self.setCurrentIndex(1)
