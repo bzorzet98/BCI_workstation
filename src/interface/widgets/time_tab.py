@@ -200,7 +200,7 @@ class TimeDomainTab(QWidget):
         if not report or 'artifacts' not in report: return
         
         arts = report['artifacts']
-        bad_indices = arts.get('bad_indices', [])
+        bad_trials = arts.get('bad_trials', [])
         bad_tags = arts.get('bad_tags', [])
         tmin, tmax = arts.get('tmin', -1), arts.get('tmax', 3)
         
@@ -208,7 +208,7 @@ class TimeDomainTab(QWidget):
         sfreq = self.session.current_data.info['sfreq']
         _, y_max = self.ax.get_ylim()
 
-        for i, idx in enumerate(bad_indices):
+        for i, idx in enumerate(bad_trials):
             if idx < len(events):
                 onset_sec = events[idx, 0] / sfreq
                 self.ax.axvspan(onset_sec + tmin, onset_sec + tmax, color='red', alpha=0.2, zorder=0)

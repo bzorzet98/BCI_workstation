@@ -20,6 +20,9 @@ class SessionState:
         self.selected_channels = None
         self.extra_info = {}
         
+        # --- EDA State ---
+        self.eda_report = None
+        
         # --- STRUCTURED HISTORY ---
         # We initialize the structure expected by the batch preprocessor
         self.pipeline = {
@@ -49,6 +52,7 @@ class SessionState:
         # 3. Reset State
         self.selected_channels = None
         self.history = []
+        self.eda_report = None
         self.pipeline = {"raw_pipeline": [], "epoching": None, "epoch_pipeline": []}
         
         print(f"Session started: {ds_name} | Sub {sub_id} | {ctx}")
@@ -133,6 +137,7 @@ class SessionState:
         
         # Clear history
         self.history = []
+        self.eda_report = None
         self.pipeline = {"raw_pipeline": [], "epoching": None, "epoch_pipeline": []}
         return True
     

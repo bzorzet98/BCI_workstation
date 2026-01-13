@@ -3,8 +3,8 @@ import mne
 from .base_analyzer import BaseAnalyzer
 
 class FalseMIAnalyzer(BaseAnalyzer):
-    def __init__(self,picks=None, 
-                 emg_filter=(30.0, 100.0), 
+    def __init__(self,picks=["EMG1","EMG2","EMG3","EMG4"], 
+                 emg_filter=(30.0, 95.0), 
                  notch_filter=50.0,
                  tmin=-1.0, 
                  tmax=3.0,
@@ -119,7 +119,7 @@ class FalseMIAnalyzer(BaseAnalyzer):
                 "visuals": channel_visuals,
                 "artifacts": {
                     "bad_trials": bad_trials,
-                    "tags": trial_tags,
+                    "bad_tags": trial_tags,
                     "tmin": self.epoch_tmin,
                     "tmax": self.epoch_tmax,
                 }

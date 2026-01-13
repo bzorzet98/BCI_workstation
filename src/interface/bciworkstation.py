@@ -231,15 +231,17 @@ class BCIWorkstationGUI(QMainWindow):
             QMessageBox.critical(self, "Error", str(e))
 
     def refresh_gui(self):
-        """Central method to update all UI elements after a data change."""
         self.refresh_history()
-        # Refresh the new split tabs
         self.tab_info.refresh()
         self.tab_meta.refresh()
         self.tab_chans.refresh()
         self.tab_proc.refresh_options()
         self.tab_time.refresh()
         self.tab_freq.refresh()
+        
+        # IMPORTANT: Just call refresh, don't do self.tab_eda = EDATab(...)
+        if hasattr(self, 'tab_eda'):
+            self.tab_eda.refresh()
 
     def refresh_history(self):
         self.list_history.clear()
