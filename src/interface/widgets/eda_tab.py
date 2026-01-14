@@ -26,6 +26,7 @@ class EDATab(QTabWidget):
         self.c_ax = self.style_kwargs.get("axes.facecolor", "#1e1f22")
         self.c_text = self.style_kwargs.get("text.color", "#cfd8dc")
         self.c_spine = self.style_kwargs.get("axes.edgecolor", "#4e5154")
+        self.event_colors = ['#3498db', '#e67e22', '#2ecc71', '#e74c3c', '#9b59b6']
 
         # Persistence
         self.inputs = {}
@@ -116,105 +117,184 @@ class EDATab(QTabWidget):
         layout.addWidget(params_panel)
 
     def _setup_results_tab(self):
-        """Layout: [ Result Navigation Tabs ]"""
         layout = QVBoxLayout(self.tab_results)
-        self.inner_results = QTabWidget()
+        self.res_subtabs = QTabWidget()
         
-        # Result Tab 1: Text Summary
+        # SUB-TAB 1: Summary
         self.txt_report = QTextEdit()
         self.txt_report.setReadOnly(True)
-        self.txt_report.setStyleSheet(f"background-color: {self.c_ax}; color: {self.c_text}; font-family: monospace;")
+        self.txt_report.setStyleSheet(f"background-color: {self.c_ax}; color: {self.c_text};")
         
-        # Result Tab 2: Visual Analytics
-        plot_container = QWidget()
-        p_vbox = QVBoxLayout(plot_container)
+        # SUB-TAB 2: Histograms
+        self.tab_hist = self._create_plot_subtab(self.update_hist_canvas, has_math=True)
+        # SUB-TAB 3: Scatter Plot
+        self.tab_scatter = self._create_plot_subtab(self.update_scatter_canvas, has_math=True, has_event_filter=True)
+        # SUB-TAB 4: Detail Inspection
+        self.tab_detail = self._create_plot_subtab(self.update_detail_canvas, has_math=True)
+
+        self.res_subtabs.addTab(self.txt_report, "Text Summary")
+        self.res_subtabs.addTab(self.tab_hist, "Distributions")
+        self.res_subtabs.addTab(self.tab_scatter, "Trial Mapping")
+        self.res_subtabs.addTab(self.tab_detail, "Signal Inspection")
         
-        # Selection Bar
+        layout.addWidget(self.res_subtabs)
+        
+    def _create_plot_subtab(self, callback, has_math=False, has_event_filter=False):
+        """Helper to build sub-tabs with selectors and a canvas."""
+        w = QWidget(); lay = QVBoxLayout(w)
         h_ctrl = QHBoxLayout()
-        self.cb_metric_selector = QComboBox()
-        self.cb_channel_selector = QComboBox() 
-        self.cb_metric_selector.currentIndexChanged.connect(self._update_channel_options)
-        self.cb_channel_selector.currentIndexChanged.connect(self.update_canvas)
-
-        h_ctrl.addWidget(QLabel("Metric:"))
-        h_ctrl.addWidget(self.cb_metric_selector)
-        h_ctrl.addWidget(QLabel("Channel:"))
-        h_ctrl.addWidget(self.cb_channel_selector)
-        h_ctrl.addStretch()
-        p_vbox.addLayout(h_ctrl)
-
-        # Plot Controls (Log Scale, Z-Score, Z-MAD)
-        h_opts = QHBoxLayout()
-        self.chk_log_x = QCheckBox("Log Scale (X)")
-        self.chk_zscore = QCheckBox("Z-Score")
-        self.chk_zmad = QCheckBox("Z-MAD")
         
-        self.chk_zscore.toggled.connect(lambda chk: self.chk_zmad.setChecked(False) if chk else None)
-        self.chk_zmad.toggled.connect(lambda chk: self.chk_zscore.setChecked(False) if chk else None)
+        w.cb_metric = QComboBox(); w.cb_ch = QComboBox()
+        w.cb_metric.currentIndexChanged.connect(self._sync_selectors) # SYNC trigger
+        w.cb_ch.currentIndexChanged.connect(callback)
+        
+        h_ctrl.addWidget(QLabel("Metric:")); h_ctrl.addWidget(w.cb_metric)
+        h_ctrl.addWidget(QLabel("Channel:")); h_ctrl.addWidget(w.cb_ch)
+        
+        if has_math:
+            w.chk_log = QCheckBox("Log"); w.chk_z = QCheckBox("Z-Score"); w.chk_mad = QCheckBox("Z-MAD")
+            for c in [w.chk_log, w.chk_z, w.chk_mad]: 
+                c.stateChanged.connect(callback)
+                h_ctrl.addWidget(c)
+        
+        if has_event_filter:
+            w.cb_type = QComboBox(); w.cb_type.addItem("All Trial Types")
+            w.cb_type.currentIndexChanged.connect(callback)
+            h_ctrl.addWidget(QLabel("Event:")); h_ctrl.addWidget(w.cb_type)
 
-        for chk in [self.chk_log_x, self.chk_zscore, self.chk_zmad]:
-            chk.stateChanged.connect(self.update_canvas)
-            h_opts.addWidget(chk)
-        h_opts.addStretch()
-        p_vbox.addLayout(h_opts)
+        h_ctrl.addStretch(); lay.addLayout(h_ctrl)
+        w.fig = Figure(facecolor=self.c_bg, tight_layout=True); w.canvas = FigureCanvas(w.fig)
+        lay.addWidget(w.canvas)
+        return w  
+    
+    def _sync_selectors(self):
+        """Ensures all plot tabs are looking at the same Metric/Channel."""
+        if sip.isdeleted(self) or not self.last_report: return
         
-        # Matplotlib Canvas
-        self.figure = Figure(facecolor=self.c_bg, tight_layout=True)
-        self.canvas = FigureCanvas(self.figure)
-        p_vbox.addWidget(self.canvas)
+        # Get values from the sender (the combobox that was clicked)
+        sender = self.sender()
+        if not isinstance(sender, QComboBox): return
         
-        self.inner_results.addTab(self.txt_report, "Text Summary")
-        self.inner_results.addTab(plot_container, "Visual Analytics")
-        layout.addWidget(self.inner_results)
+        val = sender.currentText()
+        is_metric = "cb_metric" in sender.objectName() # Optional: if you name them
+        
+        # For simplicity, we just update all canvases when a metric changes
+        self.update_hist_canvas()
+        self.update_scatter_canvas()
+        self.update_detail_canvas()  
+        
+    def _style_ax(self, ax):
+        """Standardizes axis appearance."""
+        ax.set_facecolor(self.c_ax)
+        ax.tick_params(colors=self.c_text)
+        for s in ax.spines.values(): s.set_color(self.c_spine)
+        ax.xaxis.label.set_color(self.c_text)
+        ax.yaxis.label.set_color(self.c_text)
+        ax.title.set_color(self.c_text)
+        
+    
+    def update_hist_canvas(self):
+        if not self.last_report: return
+        w = self.tab_hist; w.fig.clear(); ax = w.fig.add_subplot(111); self._style_ax(ax)
+        
+        metric, ch = w.cb_metric.currentText(), w.cb_ch.currentText()
+        if not metric or not ch: return
+        visuals_data = self.last_report['visuals'].get(metric, {})
+
+        if ch == "All Channels (Overlay)":
+            for channel_name, raw_data in visuals_data.items():
+                # Apply transforms to each channel independently
+                data = self._apply_transforms(raw_data, w)
+                ax.hist(data, bins=30, alpha=0.4, label=channel_name)
+            ax.legend(fontsize=8)
+        else:
+            if ch in visuals_data:
+                data = self._apply_transforms(visuals_data[ch], w)
+                ax.hist(data, bins=30, color='#589df6', edgecolor='white', alpha=0.8)
+        
+        ax.set_title(f"Distribution: {metric}")
+        w.canvas.draw()
+        
+    def update_scatter_canvas(self):
+        if not self.last_report: return
+        w = self.tab_scatter; w.fig.clear(); ax = w.fig.add_subplot(111); self._style_ax(ax)
+        
+        metric, ch = w.cb_metric.currentText(), w.cb_ch.currentText()
+        if not metric or not ch or ch == "All Channels (Overlay)":
+            ax.text(0.5, 0.5, "Select a channel for Mapping", ha='center', color='gray')
+            w.canvas.draw(); return
+
+        raw_y_vals = self.last_report['visuals'][metric][ch]
+        # Transform Y-Axis so we see outliers in "Standard Deviations" if requested
+        y_vals = self._apply_transforms(raw_y_vals, w)
+        
+        events = np.array(self.last_report['artifacts'].get('event_types', []))
+        bad_idx = self.last_report['artifacts'].get('bad_indices', [])
+        
+        unique_types = np.unique(events)
+        for i, etype in enumerate(unique_types):
+            mask = (events == etype)
+            ax.scatter(np.where(mask)[0], y_vals[mask], 
+                       color=self.event_colors[i % 5], label=f"Type {etype}", alpha=0.5)
+
+        ax.scatter(bad_idx, y_vals[bad_idx], color='red', marker='x', s=80, label="Flagged")
+        ax.set_ylabel("Metric (Transformed)" if w.chk_z.isChecked() else "Metric Value")
+        ax.legend(); w.canvas.draw()
+    
+    def update_detail_canvas(self):
+        if not self.last_report: return
+        w = self.tab_detail; w.fig.clear(); ax = w.fig.add_subplot(111); self._style_ax(ax)
+        
+        metric, ch = w.cb_metric.currentText(), w.cb_ch.currentText()
+        if not metric or not ch or ch == "All Channels (Overlay)":
+            ax.text(0.5, 0.5, "Select a channel for Inspection", ha='center', color='gray')
+            w.canvas.draw(); return
+
+        # 1. Transform the trial data
+        raw_data = self.last_report['visuals'][metric][ch]
+        y_vals = self._apply_transforms(raw_data, w)
+        ax.plot(y_vals, color='#589df6', lw=1.5, label="Trial Metric")
+        
+        # 2. Transform the Threshold Line (Critical for consistency!)
+        # We must transform the threshold value using the SAME stats as the data
+        thresholds = self.last_report.get('threshold_lines', {})
+        if ch in thresholds:
+            raw_thresh = thresholds[ch]
+            # To transform the threshold properly, we re-run the transform 
+            # including the threshold in the calculation or using the stored stats.
+            # Simple approach: see if checkboxes are active
+            transformed_thresh = raw_thresh
+            if w.chk_log.isChecked(): transformed_thresh = np.log10(max(raw_thresh, 1e-12))
+            
+            if w.chk_z.isChecked():
+                transformed_thresh = (transformed_thresh - np.mean(raw_data)) / (np.std(raw_data) + 1e-9)
+            elif w.chk_mad.isChecked():
+                med, mad = np.median(raw_data), np.median(np.abs(raw_data - np.median(raw_data)))
+                transformed_thresh = (transformed_thresh - med) / (mad * 1.4826 + 1e-9)
+                
+            ax.axhline(y=transformed_thresh, color='red', ls='--', label="Threshold")
+        
+        ax.legend(); w.canvas.draw()
 
     # --- MATH & PLOTTING ---
-
-    def _apply_transforms(self, data_list):
-        data = np.array(data_list, dtype=float)
-        if self.chk_zscore.isChecked():
-            data = (data - np.mean(data)) / (np.std(data) + 1e-9)
-        elif self.chk_zmad.isChecked():
-            median = np.median(data)
-            mad = np.median(np.abs(data - median))
-            data = (data - median) / (mad * 1.4826 + 1e-9)
-        return data
-
-    def update_canvas(self):
-        if sip.isdeleted(self) or not self.last_report: return
-        metric = self.cb_metric_selector.currentText()
-        target_ch = self.cb_channel_selector.currentText()
-        if not metric or not target_ch: return
-
-        visuals_data = self.last_report['visuals'].get(metric, {})
-        self.figure.clear()
-        ax = self.figure.add_subplot(111)
-        ax.set_facecolor(self.c_ax)
-
-        # Labels
-        x_label = metric
-        if self.chk_zscore.isChecked(): x_label += " (Z-Score)"
-        if self.chk_zmad.isChecked(): x_label += " (Z-MAD)"
-
-        if target_ch == "All Channels (Overlay)":
-            for ch, raw_data in visuals_data.items():
-                transformed = self._apply_transforms(raw_data)
-                ax.hist(transformed, bins=30, alpha=0.4, label=ch)
-            ax.legend(fontsize=8, facecolor=self.c_ax, labelcolor=self.c_text)
-        else:
-            raw_data = visuals_data.get(target_ch, [])
-            transformed = self._apply_transforms(raw_data)
-            ax.hist(transformed, bins=30, color='#589df6', edgecolor='white', alpha=0.8)
-            ax.set_title(f"{metric} - Channel: {target_ch}", color=self.c_text)
-
-        ax.set_xlabel(x_label, color=self.c_text)
-        ax.set_ylabel("Trial Count", color=self.c_text)
-        if self.chk_log_x.isChecked(): ax.set_xscale('log', nonpositive='clip')
+    def show_results(self, report):
+        self.last_report = report
+        self.txt_report.setText(report.get('summary', ""))
         
-        ax.tick_params(colors=self.c_text)
-        for spine in ax.spines.values(): spine.set_color(self.c_spine)
-        self.canvas.draw()
+        # Populate all sub-tab comboboxes
+        for tab in [self.tab_hist, self.tab_scatter, self.tab_detail]:
+            tab.cb_metric.blockSignals(True); tab.cb_metric.clear()
+            tab.cb_metric.addItems(list(report['visuals'].keys()))
+            tab.cb_metric.blockSignals(False)
+            
+            tab.cb_ch.blockSignals(True); tab.cb_ch.clear()
+            tab.cb_ch.addItem("All Channels (Overlay)")
+            # Get channels from the first metric
+            first_m = list(report['visuals'].keys())[0]
+            tab.cb_ch.addItems(list(report['visuals'][first_m].keys()))
+            tab.cb_ch.blockSignals(False)
 
-    # --- LOGIC & EVENTS ---
+        self.update_hist_canvas(); self.update_scatter_canvas(); self.update_detail_canvas()
 
     def on_analyzer_changed(self):
         if sip.isdeleted(self): return
@@ -222,86 +302,72 @@ class EDATab(QTabWidget):
             item = self.form_layout.takeAt(0)
             if item.widget(): item.widget().deleteLater()
         self.inputs = {}
-        
         name, path = self.combo_analyzer.currentText(), self.combo_analyzer.currentData()
         params = Registry.get_analyzer_params(name, path)
         for arg, val in params.items():
-            if arg in ['self', 'kwargs', 'args']: continue
-            lbl = QLabel(arg)
-            lbl.setStyleSheet("color: #333; font-weight: bold;")
-            le = QLineEdit(str(val))
-            le.setStyleSheet("background-color: white; color: black; border: 1px solid #ccc; padding: 4px;")
-            self.form_layout.addRow(lbl, le)
-            self.inputs[arg] = le
+            if arg in ['self', 'kwargs']: continue
+            lbl = QLabel(arg); le = QLineEdit(str(val))
+            self.form_layout.addRow(lbl, le); self.inputs[arg] = le
 
     def run_analysis(self):
         if not self.session.current_data: return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             kwargs = {k: ast.literal_eval(v.text()) if v.text().strip() else "" for k, v in self.inputs.items()}
-            name, path = self.combo_analyzer.currentText(), self.combo_analyzer.currentData()
-            Cls = import_class(name, path)
+            Cls = import_class(self.combo_analyzer.currentText(), self.combo_analyzer.currentData())
             
-            analyzer = Cls(**kwargs)
+            analyzer = Cls( **kwargs)
             report = analyzer.analyze(self.session.current_data)
-            
             self.session.eda_report = report
-            self.show_results(report)
             
-            # Update History
-            run_name = f"{name} - #{self.list_history.count() + 1}"
-            self.history_data.append({'name': run_name, 'report': report})
-            self.list_history.addItem(run_name)
+            # Save history
+            name = self.combo_analyzer.currentText()
+            self.history_data.append({'name': f"{name} #{self.list_history.count()+1}", 'report': report})
+            self.list_history.addItem(self.history_data[-1]['name'])
             
-            self.setCurrentIndex(1) # Jump to results tab
-            main_win = self.window()
-            if hasattr(main_win, 'refresh_gui'): main_win.refresh_gui()
-                
-        except Exception as e:
-            self.txt_report.setText(f"Analysis Error: {e}")
-            self.setCurrentIndex(1)
-        finally:
-            QApplication.restoreOverrideCursor()
-
-    def show_results(self, report):
-        if sip.isdeleted(self): return
-        self.last_report = report
-        self.txt_report.setText(report.get('summary', "Completed."))
-        
-        self.cb_metric_selector.blockSignals(True)
-        self.cb_metric_selector.clear()
-        visuals = report.get('visuals', {})
-        if visuals: self.cb_metric_selector.addItems(list(visuals.keys()))
-        self.cb_metric_selector.blockSignals(False)
-        self._update_channel_options()
-
-    def _update_channel_options(self):
-        if not self.last_report: return
-        metric = self.cb_metric_selector.currentText()
-        if not metric: return
-        channels = list(self.last_report['visuals'].get(metric, {}).keys())
-        self.cb_channel_selector.blockSignals(True)
-        self.cb_channel_selector.clear()
-        self.cb_channel_selector.addItem("All Channels (Overlay)")
-        self.cb_channel_selector.addItems(channels)
-        self.cb_channel_selector.blockSignals(False)
-        self.update_canvas()
+            self.show_results(report); self.setCurrentIndex(1)
+            if hasattr(self.window(), 'refresh_gui'): self.window().refresh_gui()
+        except Exception as e: self.txt_report.setText(f"Error: {e}"); self.setCurrentIndex(1)
+        finally: QApplication.restoreOverrideCursor()
 
     def _load_from_history(self, item):
         idx = self.list_history.row(item)
-        if idx < len(self.history_data):
-            report = self.history_data[idx]['report']
-            self.session.eda_report = report
-            self.show_results(report)
-            self.setCurrentIndex(1) # Jump to results tab
-            main_win = self.window()
-            if hasattr(main_win, 'refresh_gui'): main_win.refresh_gui()
+        report = self.history_data[idx]['report']
+        self.session.eda_report = report
+        self.show_results(report)
+        self.setCurrentIndex(1) # Jump to results tab
+        main_win = self.window()
+        if hasattr(main_win, 'refresh_gui'): main_win.refresh_gui()
 
     def _remove_selected_history(self):
         row = self.list_history.currentRow()
         if row >= 0:
-            self.history_data.pop(row)
-            self.list_history.takeItem(row)
+            self.history_data.pop(row); self.list_history.takeItem(row)
             self.session.eda_report = None
             main_win = self.window()
             if hasattr(main_win, 'refresh_gui'): main_win.refresh_gui()
+            
+    def _apply_transforms(self, data_input, sub_tab):
+        """
+        Applies Log, Z-Score, or Z-MAD to data based on UI checkboxes.
+        Handles both individual thresholds and full data arrays.
+        """
+        data = np.array(data_input, dtype=float)
+        
+        # 1. Log Transformation (applied first to compress dynamic range)
+        if hasattr(sub_tab, 'chk_log') and sub_tab.chk_log.isChecked():
+            data = np.log10(np.maximum(data, 1e-12))
+            
+        # 2. Normalization (Z-Score takes priority over Z-MAD)
+        if hasattr(sub_tab, 'chk_z') and sub_tab.chk_z.isChecked():
+            # Use global stats from the whole channel session to normalize
+            mu, sigma = np.mean(data), np.std(data)
+            data = (data - mu) / (sigma + 1e-9)
+            
+        elif hasattr(sub_tab, 'chk_mad') and sub_tab.chk_mad.isChecked():
+            # Robust normalization using Median Absolute Deviation
+            median = np.median(data)
+            mad = np.median(np.abs(data - median))
+            data = (data - median) / (mad * 1.4826 + 1e-9)
+            
+        return data

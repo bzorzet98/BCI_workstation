@@ -31,10 +31,14 @@ class PeakAmplitudeAnalyzer(BaseAnalyzer):
                 tags[idx].append(f"{ch}: peak_outlier")
 
         idx_list = sorted(list(bad_indices))
+        
+        events = mne.find_events(raw, stim_channel='stim', verbose=False)
+        event_types = events[:, 2] # The 3rd column is the ID
         return {
             "summary": f"Peak Analysis: {len(idx_list)} trials flagged.",
             "visuals": {"Peak-to-Peak": {ch: transformed[:, i].tolist() for i, ch in enumerate(self.picks)}},
             "artifacts": {"bad_indices": idx_list, "bad_tags": [tags[i] for i in idx_list],
+                          "event_types": event_types.tolist(),
                           "tmin": self.params['tmin'], "tmax": self.params['tmax']}
         }
 

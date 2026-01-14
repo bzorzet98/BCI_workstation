@@ -25,7 +25,7 @@ class KurtosisAnalyzer(BaseAnalyzer):
         # Apply Transforms
         processed_metric = self._apply_transforms(raw_metric)
         
-        return self._build_report(processed_metric, "Kurtosis", epochs)
+        return self._build_report(processed_metric, "Kurtosis", epochs, events)
 
     def _apply_transforms(self, data):
         if self.params['log']: data = np.log10(np.maximum(data, 1e-12))
@@ -37,7 +37,7 @@ class KurtosisAnalyzer(BaseAnalyzer):
             data = (data - med) / (mad * 1.4826 + 1e-9)
         return data
 
-    def _build_report(self, data, name, epochs):
+    def _build_report(self, data, name, epochs, events):
         bad_indices = set()
         tags = [[] for _ in range(len(epochs))]
         for j, ch in enumerate(self.picks):
@@ -47,9 +47,11 @@ class KurtosisAnalyzer(BaseAnalyzer):
                 tags[idx].append(f"{ch}: high_{name}")
         
         idx_list = sorted(list(bad_indices))
+        
         return {
             "summary": f"{name} Analysis: {len(idx_list)} trials flagged.",
             "visuals": {name: {ch: data[:, i].tolist() for i, ch in enumerate(self.picks)}},
             "artifacts": {"bad_indices": idx_list, "bad_tags": [tags[i] for i in idx_list],
+                          "event_types": events[:, 2].tolist(),
                           "tmin": self.params['tmin'], "tmax": self.params['tmax']}
         }

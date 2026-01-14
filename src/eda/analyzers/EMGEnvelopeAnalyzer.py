@@ -5,7 +5,12 @@ from .base_analyzer import BaseAnalyzer
 
 class EMGEnvelopeAnalyzer(BaseAnalyzer):
     """
-    Modular EMG Artifact Detection using sliding window means and adaptive thresholding.
+    Modular EMG Artifact Detection, this analyzer computes:
+     * Contamination Rate (%): Percentage of the trial spent above the threshold.
+     * Peak-to-Baseline Ratio (Local SNR):  Max(Envelope_Task) / Mean(Envelope_Baseline), how "loud" the muscle 
+        was compared to that specific subject's rest level. It normalizes the subject's "noise floor.
+    * Envelope Integral (Area under the curve): Total energy of the envelope during the task window.
+    
     """
     def __init__(self, picks=["EMG1", "EMG2", "EMG3", "EMG4"], 
                  bandpass_filter=(10.0, 95.0),
@@ -27,8 +32,8 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
     def analyze(self, raw: mne.io.BaseRaw):
         # 1. Shadow Preprocessing on Raw
         local_raw = raw.copy().pick(self.picks)
-        local_raw.filter(self.params['bp'][0], self.params['bp'][1], verbose=False)
-        local_raw.notch_filter(freqs=self.params['notch'], verbose=False)
+        local_raw.filter(self.params['bp'][0], self.params['bp'][1], picks=self.picks, verbose=False)
+        local_raw.notch_filter(freqs=self.params['notch'], picks=self.picks, verbose=False)
         
         # 2. Epoching
         events = mne.find_events(raw, stim_channel='stim', verbose=False)
@@ -74,7 +79,8 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
             
             if trial_tags[i]:
                 bad_indices.append(i)
-
+        events = mne.find_events(raw, stim_channel='stim', verbose=False)
+        event_types = events[:, 2] # The 3rd column is the ID
         return {
             "summary": (f"Sliding Window Result:\n"
                         f"Found {len(bad_indices)} contaminated trials.\n"
@@ -83,9 +89,11 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
                 "Active Windows (%)": {ch: contamination_rates[:, j].tolist() for j, ch in enumerate(self.picks)},
                 "Peak Envelope (uV)": {ch: (np.max(envelope[:, j, :], axis=-1) * 1e6).tolist() for j, ch in enumerate(self.picks)}
             },
+            "threshold_lines": thresholds, 
             "artifacts": {
                 "bad_indices": bad_indices,
                 "bad_tags": [trial_tags[i] for i in bad_indices],
+                "event_types": event_types.tolist(),
                 "tmin": self.params['tmin'],
                 "tmax": self.params['tmax']
             }

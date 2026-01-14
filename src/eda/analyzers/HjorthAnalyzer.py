@@ -44,10 +44,13 @@ class HjorthAnalyzer(BaseAnalyzer):
                     tags[idx].append(f"{ch}: Hjorth_{m_name}")
 
         idx_list = sorted(list(bad_indices))
+        events = mne.find_events(raw, stim_channel='stim', verbose=False)
+        event_types = events[:, 2] # The 3rd column is the ID
         return {
             "summary": f"Hjorth Analysis complete. {len(idx_list)} trials flagged.",
             "visuals": visuals,
             "artifacts": {"bad_indices": idx_list, "bad_tags": [tags[i] for i in idx_list],
+                          "event_types": event_types.tolist(),
                           "tmin": self.params['tmin'], "tmax": self.params['tmax']}
         }
 

@@ -46,6 +46,8 @@ class EMGBurstAnalyzer(BaseAnalyzer):
                 if peaks[i, j] > self.params['uv']:
                     trial_tags[i].append(f"{ch}: Burst_Peak")
             if trial_tags[i]: bad_indices.append(i)
+        events = mne.find_events(raw, stim_channel='stim', verbose=False)
+        event_types = events[:, 2] # The 3rd column is the ID
 
         return {
             "summary": f"Burst Detection: {len(bad_indices)} trials flagged.",
@@ -54,5 +56,6 @@ class EMGBurstAnalyzer(BaseAnalyzer):
                 "Peak Amplitude (uV)": {ch: peaks[:, i].tolist() for i, ch in enumerate(self.picks)}
             },
             "artifacts": {"bad_indices": bad_indices, "bad_tags": [trial_tags[i] for i in bad_indices],
+                          "event_types": event_types.tolist(),
                           "tmin": self.params['tmin'], "tmax": self.params['tmax']}
         }
