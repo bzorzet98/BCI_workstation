@@ -211,38 +211,103 @@ class EDATab(QTabWidget):
         else:
             ax.hist(self._apply_transforms(data_dict[ch], w), bins=30, color='#589df6', edgecolor='white', alpha=0.8)
         w.canvas.draw()
+        
+    def _is_trial_flagged_for_context(self, trial_idx, channel):
+        """
+        Returns True if the trial was flagged specifically because of this channel.
+        """
+        if not self.last_report: return False
+        
+        bad_indices = self.last_report['artifacts']['bad_indices']
+        if trial_idx not in bad_indices: return False
+        
+        # Find the tags for this specific trial
+        pos = bad_indices.index(trial_idx)
+        tags = self.last_report['artifacts']['bad_tags'][pos] # List of strings
+        
+        # We only care if THIS channel appears in the tags
+        search_term = channel.lower()
+        for t in tags:
+            if search_term in t.lower():
+                return True
+        return False
 
     def update_scatter_canvas(self):
+        """Feature Correlation: X-Metric vs Y-Metric."""
         if not self.last_report: return
         w = self.tab_scatter; w.fig.clear(); ax = w.fig.add_subplot(111); self._style_ax(ax)
         mx, my, ch = w.cb_metric_x.currentText(), w.cb_metric_y.currentText(), w.cb_ch.currentText()
-        if not mx or not my or not ch or ch == "All Channels (Overlay)": return
-
-        x_vals = self._apply_transforms(self.last_report['metrics'][mx]['values'][ch], w)
-        y_vals = self._apply_transforms(self.last_report['metrics'][my]['values'][ch], w)
-        bad_idx = self.last_report['artifacts']['bad_indices']
         
-        ax.scatter(x_vals, y_vals, color='gray', alpha=0.2, label="Normal")
-        ax.scatter(x_vals[bad_idx], y_vals[bad_idx], color='red', marker='x', s=80, label="Flagged")
+        if not mx or not my or not ch or ch == "All Channels (Overlay)": 
+            ax.text(0.5, 0.5, "Select a channel", ha='center', color='gray'); w.canvas.draw(); return
+
+        # 1. Get Values
+        raw_x = self.last_report['metrics'][mx]['values'][ch]
+        raw_y = self.last_report['metrics'][my]['values'][ch]
+        
+        x_vals = self._apply_transforms(raw_x, w)
+        y_vals = self._apply_transforms(raw_y, w)
+        events = np.array(self.last_report['artifacts'].get('event_types', []))
+
+        # 2. Plot Points by Cue Type
+        unique_cues = np.unique(events)
+        for i, cue_id in enumerate(unique_cues):
+            mask = (events == cue_id)
+            ax.scatter(x_vals[mask], y_vals[mask], 
+                       color=self.event_colors[i % len(self.event_colors)], 
+                       label=f"Cue {cue_id}", alpha=0.4, s=50)
+
+        # 3. --- FIX: SMART FLAGGING ---
+        # We must plot the Red X at the (Metric_X, Metric_Y) coordinate, not the index!
+        flagged_x, flagged_y = [], []
+        for i in range(len(y_vals)):
+            if self._is_trial_flagged_for_context(i, ch):
+                flagged_x.append(x_vals[i]) # Value of X-Metric for this trial
+                flagged_y.append(y_vals[i]) # Value of Y-Metric for this trial
+        
+        if flagged_x:
+            ax.scatter(flagged_x, flagged_y, color='red', marker='x', 
+                       s=120, linewidth=2, label=f"Flagged {ch}", zorder=5)
+
         ax.set_xlabel(mx); ax.set_ylabel(my); ax.legend(); w.canvas.draw()
 
     def update_mapping_canvas(self):
+        """Temporal Mapping: Trial Index vs Metric."""
         if not self.last_report: return
         w = self.tab_mapping; w.fig.clear(); ax = w.fig.add_subplot(111); self._style_ax(ax)
         metric, ch = w.cb_metric.currentText(), w.cb_ch.currentText()
-        if not metric or not ch or ch == "All Channels (Overlay)": return
-
-        y_vals = self._apply_transforms(self.last_report['metrics'][metric]['values'][ch], w)
-        events = np.array(self.last_report['artifacts']['event_types'])
-        bad_idx = self.last_report['artifacts']['bad_indices']
         
-        for i, etype in enumerate(np.unique(events)):
-            mask = (events == etype)
-            ax.scatter(np.where(mask)[0], y_vals[mask], color=self.event_colors[i % 5], label=f"Cue {etype}", alpha=0.6)
+        if not metric or not ch or ch == "All Channels (Overlay)": 
+            ax.text(0.5, 0.5, "Select a channel", ha='center', color='gray'); w.canvas.draw(); return
 
-        ax.scatter(bad_idx, y_vals[bad_idx], color='red', marker='x', s=100, label="Flagged")
-        ax.set_title(f"Trial Index vs {metric}"); ax.legend(); w.canvas.draw()
+        raw_y = self.last_report['metrics'][metric]['values'][ch]
+        y_vals = self._apply_transforms(raw_y, w)
+        x_indices = np.arange(len(y_vals))
+        events = np.array(self.last_report['artifacts']['event_types'])
+        
+        # 1. Plot Cues
+        unique_cues = np.unique(events)
+        for i, cue_id in enumerate(unique_cues):
+            mask = (events == cue_id)
+            ax.scatter(x_indices[mask], y_vals[mask], 
+                       color=self.event_colors[i % len(self.event_colors)], 
+                       label=f"Cue {cue_id}", alpha=0.4, s=50)
 
+        # 2. --- SMART FLAGGING ---
+        # Here X IS the index, so it was working, but now it's channel-aware
+        flagged_idx, flagged_y = [], []
+        for i in range(len(y_vals)):
+            if self._is_trial_flagged_for_context(i, ch):
+                flagged_idx.append(i)
+                flagged_y.append(y_vals[i])
+        
+        if flagged_idx:
+            ax.scatter(flagged_idx, flagged_y, color='red', marker='x', 
+                       s=120, linewidth=2, label=f"Flagged {ch}", zorder=5)
+
+        ax.set_title(f"Trial Index vs {metric} ({ch})")
+        ax.set_xlabel("Trial Index"); ax.legend(); w.canvas.draw()
+        
     def update_inspect_canvas(self):
         if not self.last_report or 'inspection_data' not in self.last_report: return
         w = self.tab_inspect; w.fig.clear(); ax = w.fig.add_subplot(111); self._style_ax(ax)
