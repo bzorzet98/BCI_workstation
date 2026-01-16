@@ -8,9 +8,10 @@ from src.core.registry import Registry
 class ProcessingTab(QWidget):
     stepApplied = pyqtSignal()
 
-    def __init__(self, session):
+    def __init__(self, session, style_kwargs=None):
         super().__init__()
         self.session = session
+        self.style_kwargs = style_kwargs
         self.inputs = {} # Stores QLineEdit objects for the dynamic form
         
         self._init_ui()

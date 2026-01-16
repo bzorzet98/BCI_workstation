@@ -6,7 +6,7 @@ class BaseEEGDataset(ABC):
     Abstract Base Class for all EEG Datasets.
     Enforces a standard interface for loading data with specific contexts.
     """
-    def __init__(self, dataset_path, subject_list, event_id=None, code=None):
+    def __init__(self, dataset_path, subject_list, sessions, event_id=None, code=None):
         """
         Parameters:
         -----------
@@ -21,6 +21,7 @@ class BaseEEGDataset(ABC):
         """
         self.dataset_path = dataset_path
         self.subject_list = subject_list
+        self.sessions = sessions
         self.event_id = event_id if event_id is not None else {}
         self.code = code if code is not None else self.__class__.__name__
         self.subjects_metadata = None
@@ -83,3 +84,6 @@ class BaseEEGDataset(ABC):
     
     def get_data_available(self):
         return self.data_availables
+    
+    def get_sessions(self):
+        return self.sessions

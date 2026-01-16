@@ -83,7 +83,7 @@ class Dreyer2023A(BaseEEGDataset):
                     'end_trial':800}
 
         # 2. Initialize Base Class
-        super().__init__(dataset_path=path, subject_list=subjects, event_id=event_id, code='Dreyer2023A')
+        super().__init__(dataset_path=path, subject_list=subjects,  sessions = ['session_1'],event_id=event_id, code='Dreyer2023A')
         
         # 3. Database-specific attributes
         self.sfreq = 512
@@ -95,7 +95,6 @@ class Dreyer2023A(BaseEEGDataset):
                         "emg":["EMGl", "EMGr"]}
         self.data_availables = ['motor_imagery_adquisition', 'motor_imagery_online', 'rest']
         self.data_to_load = data_to_load if data_to_load is not None else self.data_availables
-        self.sessions_available = ['session_1']
         self.unit_factor = 1e-6 # Convert from uV to V
         self.subjects_metadata = self._load_subjects_metadata(path = os.path.join(DATABASES_PATH, 'Dreyer2023',))
     
@@ -246,7 +245,7 @@ class Dreyer2023B(BaseEEGDataset):
                     'end_trial':800}
 
         # 2. Initialize Base Class
-        super().__init__(dataset_path=path, subject_list=subjects, event_id=event_id, code='Dreyer2023B')
+        super().__init__(dataset_path=path, subject_list=subjects,  sessions = ['session_1'], event_id=event_id, code='Dreyer2023B')
         
         # 3. Database-specific attributes
         self.sfreq = 512
@@ -258,7 +257,6 @@ class Dreyer2023B(BaseEEGDataset):
                         "emg":["EMGl", "EMGr"]}
         self.data_availables = ['motor_imagery_adquisition', 'motor_imagery_online', 'rest']
         self.data_to_load = data_to_load if data_to_load is not None else self.data_availables
-        self.sessions_available = ['session_1']
         self.unit_factor = 1e-6 # Convert from uV to V
         self.subjects_metadata = self._load_subjects_metadata(path = os.path.join(DATABASES_PATH, 'Dreyer2023'))
 
@@ -409,7 +407,7 @@ class Dreyer2023C(BaseEEGDataset):
                     'end_trial':800}
 
         # 2. Initialize Base Class
-        super().__init__(dataset_path=path, subject_list=subjects, event_id=event_id, code='Dreyer2023C')
+        super().__init__(dataset_path=path, subject_list=subjects,  sessions = ['session_1'], event_id=event_id, code='Dreyer2023C')
         
         # 3. Database-specific attributes
         self.sfreq = 512
@@ -421,7 +419,6 @@ class Dreyer2023C(BaseEEGDataset):
                         "emg":["EMGl", "EMGr"]}
         self.data_availables = ['motor_imagery_adquisition', 'motor_imagery_online', 'rest']
         self.data_to_load = data_to_load if data_to_load is not None else self.data_availables
-        self.sessions_available = ['session_1']
         self.unit_factor = 1e-6 # Convert from uV to V
         self.subjects_metadata = self._load_subjects_metadata(path = os.path.join(DATABASES_PATH, 'Dreyer2023'))
     

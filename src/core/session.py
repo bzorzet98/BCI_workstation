@@ -1,279 +1,246 @@
 import numpy as np
-import mne
 import json
+import mne
+from typing import List, Dict, Optional, Any, Union, Tuple 
 from src.preprocessing import EEGPreprocessor
 
 class SessionState:
     """
-    The Model. Holds the state of the current analysis session.
-    Maintains a structured pipeline history live.
+    The Model. Manages a Multi-Signal Workspace using only structured pipelines.
     """
+
     def __init__(self):
-        # Data
-        self.current_data = None 
-        self.original_data = None # CHECKPOINT: The clean loaded data
-    
-        # Metadata
-        self.dataset_name = None
-        self.subject_id = None
-        self.context = None
-        self.selected_channels = None
-        self.extra_info = {}
+        # Data: {context_label: mne_object}
+        self.workspace: Dict[str, Union[mne.io.BaseRaw, mne.Epochs]] = {}
+        self.original_workspace: Dict[str, mne.io.BaseRaw] = {}
         
-        # --- EDA State ---
-        self.eda_report = None
+        self.active_context: Optional[str] = None
+        self.dataset_name: Optional[str] = None
+        self.subject_id: Optional[int] = None
+        self.selected_channels: Optional[List[str]] = None
+        self.extra_info: Dict[str, Any] = {}
         
-        # --- STRUCTURED HISTORY ---
-        # We initialize the structure expected by the batch preprocessor
-        self.pipeline = {
-            "raw_pipeline": [],
-            "epoching": None,      # This will be a single dict, not a list
-            "epoch_pipeline": []
+        # Source of Truth for processing: {context_label: structured_pipeline_dict}
+        self.pipelines: Dict[str, Dict[str, Any]] = {}
+        
+        self.eda_report: Optional[Dict[str, Any]] = None
+        self.worker = EEGPreprocessor() # Assuming it's imported
+
+    @property
+    def current_data(self):
+        return self.workspace.get(self.active_context)
+
+    @property
+    def current_pipeline(self):
+        return self.pipelines.get(self.active_context, {})
+
+    def load_data(self, data_dict: Dict[str, mne.io.BaseRaw], ds_name: str, sub_id: int, extra_info: Dict[str, Any] = {}):
+        """Initializes the workspace and sets up a pipeline for each context."""
+        self.original_workspace = {ctx: raw.copy() for ctx, raw in data_dict.items()}
+        self.workspace = data_dict
+        self.extra_info = extra_info
+        
+        # Reset pipelines for each context
+        self.pipelines = {
+            ctx: {"raw_pipeline": [], "epoching": None, "epoch_pipeline": []} 
+            for ctx in data_dict.keys()
         }
         
-        self.worker = EEGPreprocessor()
+        self.active_context = list(data_dict.keys())[0] if data_dict else None
+        self.dataset_name, self.subject_id = ds_name, sub_id
+        self.selected_channels, self.eda_report = None, None
 
-    def load_data(self, data, ds_name, sub_id, ctx):
-        """
-        Sets new data into the session.
-        We keep a SAFE COPY of the original data to allow Undo/Reset.
-        """
-        # 1. Store Original (Clean Checkpoint)
-        # We copy it so 'current_data' modifications don't touch 'original_data'
-        self.original_data = data.copy()
-        
-        # 2. Set Working Copy
-        self.current_data = data # This is the object MNE will modify in-place
-        
-        self.dataset_name = ds_name
-        self.subject_id = sub_id
-        self.context = ctx
-        
-        # 3. Reset State
-        self.selected_channels = None
-        self.history = []
-        self.eda_report = None
-        self.pipeline = {"raw_pipeline": [], "epoching": None, "epoch_pipeline": []}
-        
-        print(f"Session started: {ds_name} | Sub {sub_id} | {ctx}")
-        
-    def run_transform(self, step_config):
-        """Executes a step and updates history."""
-        if self.current_data is None: return False
-        
-        step_name = step_config.get('name', 'Unknown')
-        print(f"Running: {step_name}...")
+    def run_transform(self, step_config: Dict[str, Any], apply_to_all: bool = False) -> bool:
+        """Applies a step and updates the structured pipeline."""
+        targets = list(self.workspace.keys()) if apply_to_all else [self.active_context]
         
         try:
-            # 1. Delegate to worker
-            new_data = self.worker.apply_single_step(self.current_data, step_config)
-            
-            # 2. Update State
-            self.current_data = new_data
-            
-            # 3. Add to History
-            self._add_to_history(step_config)
-            
-            # 4. Update Channels if needed
-            if self.selected_channels and hasattr(new_data, 'ch_names'):
-                self.selected_channels = [ch for ch in self.selected_channels if ch in new_data.ch_names]
-            
+            for ctx in targets:
+                # 1. Apply logic
+                self.workspace[ctx] = self.worker.apply_single_step(self.workspace[ctx], step_config)
+                
+                # 2. Store in structured pipeline
+                stage = step_config.get('pipeline_stage', 'raw_pipeline')
+                if stage == 'epoching':
+                    self.pipelines[ctx]['epoching'] = step_config
+                else:
+                    self.pipelines[ctx][stage].append(step_config)
             return True
         except Exception as e:
-            print(f"Transform '{step_name}' failed: {e}")
+            print(f"Error: {e}")
             return False
 
-    def obtain_events(self):
+    def get_history_flat(self) -> List[str]:
         """
-        Robustly extracts events and event_id mapping from the current data.
+        Generates the list of strings for the GUI by flattening the pipeline dict.
+        This removes the need for a separate 'history' variable.
+        """
+        if not self.active_context: return []
+        
+        pipe = self.current_pipeline
+        flat_list = []
+        
+        # We follow the logical order: Raw -> Epoching -> Epoch Pipeline
+        for step in pipe['raw_pipeline']:
+            flat_list.append(f"[Raw] {step['name']}")
+            
+        if pipe['epoching']:
+            flat_list.append(f"[Epoching] {pipe['epoching']['name']}")
+            
+        for step in pipe['epoch_pipeline']:
+            flat_list.append(f"[Epochs] {step['name']}")
+            
+        return flat_list
+
+    def undo_last_step(self) -> bool:
+        """
+        Removes the last step from the active pipeline and replays.
+        """
+        pipe = self.current_pipeline
+        if not any([pipe['raw_pipeline'], pipe['epoching'], pipe['epoch_pipeline']]):
+            return False
+
+        # 1. Logic to find and remove the 'last' logical step
+        if pipe['epoch_pipeline']:
+            pipe['epoch_pipeline'].pop()
+        elif pipe['epoching']:
+            pipe['epoching'] = None
+        else:
+            pipe['raw_pipeline'].pop()
+
+        # 2. Replay strategy to restore state
+        ctx = self.active_context
+        self.workspace[ctx] = self.original_workspace[ctx].copy()
+        
+        # Apply Raw
+        for step in pipe['raw_pipeline']:
+            self.workspace[ctx] = self.worker.apply_single_step(self.workspace[ctx], step)
+        # Apply Epoching
+        if pipe['epoching']:
+            self.workspace[ctx] = self.worker.apply_single_step(self.workspace[ctx], pipe['epoching'])
+        # Apply Epochs
+        for step in pipe['epoch_pipeline']:
+            self.workspace[ctx] = self.worker.apply_single_step(self.workspace[ctx], step)
+            
+        return True
+
+    def obtain_events(self) -> Tuple[np.ndarray, Dict[str, int]]:
+        """
+        Robustly extracts events and event_id mapping from the ACTIVE context.
+        
+        It attempts to find events via:
+        1. MNE Annotations (if Raw).
+        2. Stimulus Channels (if Raw and no annotations).
+        3. Internal event attributes (if Epochs).
+
         Returns:
-            events (np.ndarray): The events array (N, 3).
-            event_id (dict): Mapping {Label: ID}.
+            Tuple: (Numpy events array (N, 3), Dictionary {Label: ID}).
         """
-        if self.current_data is None:
+        data = self.current_data
+        if data is None:
             return np.array([]), {}
 
-        # Check cache if you implemented caching, otherwise calculation is fast enough
-        
-        events = None
-        event_id = None
+        events, event_id = None, None
 
-        # 1. Try Annotations (Preferred for Raw)
-        if isinstance(self.current_data, mne.io.BaseRaw):
+        # 1. Logic for RAW signals
+        if isinstance(data, mne.io.BaseRaw):
+            # A. Try Annotations first (standard in many modern formats)
             try:
-                events, event_id = mne.events_from_annotations(self.current_data, verbose=False)
+                events, event_id = mne.events_from_annotations(data, verbose=False)
             except Exception:
-                # Fallback if no annotations
                 pass
             
-            # 2. If no annotations, try Stim Channel
+            # B. Fallback to STIM channel detection
             if events is None or len(events) == 0:
-                stim_channels = mne.utils._get_stim_channel(None, self.current_data.info, raise_error=False)
-                if len(stim_channels) > 0:
-                    events = mne.find_events(self.current_data, verbose=False)
-                    # Create generic labels for Stim events if no dict exists
+                stim_chans = mne.utils._get_stim_channel(None, data.info, raise_error=False)
+                if stim_chans:
+                    events = mne.find_events(data, verbose=False)
+                    # Generate generic ID mapping if labels are missing
                     unique_ids = np.unique(events[:, 2])
                     event_id = {str(uid): int(uid) for uid in unique_ids}
 
-        # 3. Handle Epochs
-        elif isinstance(self.current_data, mne.Epochs):
-            events = self.current_data.events
-            event_id = self.current_data.event_id
+        # 2. Logic for EPOCHED signals
+        elif isinstance(data, mne.Epochs):
+            events = data.events
+            event_id = data.event_id
 
-        if events is None:
+        # Final safety check
+        if events is None or len(events) == 0:
             return np.array([]), {}
             
         return events, event_id
-    
-    def reset_pipeline(self):
+
+    def reset_pipeline(self, only_active: bool = True) -> bool:
         """
-        Reverts data to the original state loaded from disk.
+        Reverts signals to their original state loaded from disk.
+        
+        Args:
+            only_active (bool): If True, only resets the currently focused signal.
+                                If False, resets the entire workspace.
         """
-        if self.original_data is None: return False
+        if not self.original_workspace:
+            return False
         
-        print("Resetting pipeline to original state...")
-        # Restore from checkpoint (copying again to keep checkpoint safe)
-        self.current_data = self.original_data.copy()
+        targets = [self.active_context] if only_active else list(self.workspace.keys())
         
-        # Clear history
-        self.history = []
+        print(f"[Session] Resetting pipeline for: {targets}")
+        
+        for ctx in targets:
+            # Restore from clean checkpoint
+            self.workspace[ctx] = self.original_workspace[ctx].copy()
+            # Wipe processing history
+            self.pipelines[ctx] = {"raw_pipeline": [], "epoching": None, "epoch_pipeline": []}
+        
         self.eda_report = None
-        self.pipeline = {"raw_pipeline": [], "epoching": None, "epoch_pipeline": []}
         return True
-    
-    def load_pipeline_from_json(self, file_path):
+
+    def load_pipeline_from_json(self, file_path: str, apply_to_all: bool = False) -> bool:
         """
-        Loads a JSON file and applies the pipeline steps to the current data.
+        Loads a preprocessing JSON and applies it to the Workspace.
+        
+        Args:
+            file_path (str): Path to the .json pipeline file.
+            apply_to_all (bool): If True, the entire workspace will follow this pipeline.
+                                If False, only the active signal is transformed.
         """
         if self.current_data is None:
-            print("Error: No data loaded. Cannot apply pipeline.")
+            print("[Session] Error: No data loaded. Cannot apply pipeline.")
             return False
 
         try:
             with open(file_path, 'r') as f:
                 config = json.load(f)
             
-            # Extract the pipeline dict
-            # Handle both formats: full config output vs just the pipeline dict
-            if 'preprocessing_pipeline' in config:
-                pipeline = config['preprocessing_pipeline']
-            else:
-                # Assume the file IS the pipeline dict
-                pipeline = config
+            # Extract the pipeline dictionary (handles full exports or partial dicts)
+            pipeline = config.get('preprocessing_pipeline', config)
             
-            print(f"Loading Pipeline: {config.get('preprocessing_name', 'Unnamed')}")
+            print(f"[Session] Applying Pipeline: {config.get('preprocessing_name', 'External JSON')}")
 
-            # 1. Apply Raw Steps
-            raw_steps = pipeline.get('raw_pipeline', [])
-            for step in raw_steps:
-                # Ensure the stage tag is correct for history
-                step['pipeline_stage'] = 'raw_pipeline'
-                if not self.run_transform(step):
-                    print("Pipeline stopped due to error in raw step.")
-                    return False
+            # Define the logical order of stages
+            stages = [
+                ('raw_pipeline', 'list'),
+                ('epoching', 'dict'),
+                ('epoch_pipeline', 'list')
+            ]
 
-            # 2. Apply Epoching
-            epoch_step = pipeline.get('epoching')
-            if epoch_step:
-                # Epoching is usually a dict in the config
-                # Sometimes it might be wrapped in a list in custom JSONs, handle both
-                if isinstance(epoch_step, list) and len(epoch_step) > 0:
-                    epoch_step = epoch_step[0]
-                
-                epoch_step['pipeline_stage'] = 'epoching'
-                if not self.run_transform(epoch_step):
-                    print("Pipeline stopped due to error in epoching.")
-                    return False
+            for stage_name, data_type in stages:
+                steps = pipeline.get(stage_name)
+                if not steps:
+                    continue
 
-            # 3. Apply Epoch Pipeline
-            epoch_pipe = pipeline.get('epoch_pipeline', [])
-            for step in epoch_pipe:
-                step['pipeline_stage'] = 'epoch_pipeline'
-                if not self.run_transform(step):
-                    print("Pipeline stopped due to error in epoch step.")
-                    return False
+                # Ensure steps are in a list format for iteration
+                steps_to_run = steps if data_type == 'list' else [steps]
+
+                for step in steps_to_run:
+                    # Inject the stage information so run_transform knows where to store it
+                    step['pipeline_stage'] = stage_name
+                    
+                    if not self.run_transform(step, apply_to_all=apply_to_all):
+                        print(f"[Session] Pipeline aborted: Error in stage '{stage_name}'")
+                        return False
             
             return True
 
         except Exception as e:
-            print(f"Failed to load pipeline: {e}")
+            print(f"[Session] Failed to load JSON pipeline: {e}")
             return False
-        
-    def undo_last_step(self):
-        """
-        Removes the last step and re-calculates state.
-        """
-        if not self.history:
-            print("History empty.")
-            return False
-            
-        print("Undoing last step...")
-        
-        # 1. Pop last step
-        removed_step = self.history.pop()
-        
-        # 2. Clean up structured pipeline dict
-        self._remove_from_pipeline_structure(removed_step)
-        
-        # 3. REPLAY STRATEGY
-        # Restore original
-        self.current_data = self.original_data.copy()
-        
-        # Re-apply all remaining steps
-        # We temporarily disable history appending to avoid duplicating the list
-        temp_history = list(self.history)
-        self.history = [] # Will be rebuilt by run_transform logic or we handle manually
-        
-        # Actually, simpler to just iterate and apply, skipping the history add logic
-        # But we need run_transform logic. 
-        # Let's iterate and call worker directly.
-        
-        try:
-            for step in temp_history:
-                print(f"  Re-applying: {step['name']}")
-                self.current_data = self.worker.apply_single_step(self.current_data, step)
-            
-            # Restore the list
-            self.history = temp_history
-            return True
-            
-        except Exception as e:
-            print(f"CRITICAL ERROR during Undo Replay: {e}")
-            # If replay fails, we are in a bad state. Reset.
-            self.reset_pipeline()
-            return False
-
-    # --- Internal Helpers ---
-
-    def _add_to_history(self, step_config):
-        """Adds step to flat list and structured dict."""
-        self.history.append(step_config)
-        
-        stage = step_config.get('pipeline_stage', 'raw_pipeline')
-        
-        # Clean config for JSON export (remove GUI artifacts if any)
-        clean = {k:v for k,v in step_config.items() if k != 'pipeline_stage'}
-        clean['pipeline_stage'] = stage # Keep stage for logic
-        
-        if stage == 'epoching':
-            self.pipeline['epoching'] = clean
-        elif stage in self.pipeline:
-            self.pipeline[stage].append(clean)
-        else:
-            self.pipeline['raw_pipeline'].append(clean)
-
-    def _remove_from_pipeline_structure(self, step_config):
-        """Removes a specific step from the structured dict."""
-        stage = step_config.get('pipeline_stage', 'raw_pipeline')
-        
-        if stage == 'epoching':
-            self.pipeline['epoching'] = None
-        elif stage in self.pipeline and self.pipeline[stage]:
-            # Pop the last item (assuming LIFO order match)
-            self.pipeline[stage].pop()
-
-    def get_history_flat(self):
-        """Returns strings for GUI display."""
-        return [f"[{s.get('pipeline_stage','raw')}] {s['name']}" for s in self.history]
-    
-    

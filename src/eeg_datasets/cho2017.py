@@ -65,7 +65,7 @@ class Cho2017(BaseEEGDataset):
         event_id = {'left_hand': 1, 'right_hand': 2}
         
         # 2. Initialize Base Class
-        super().__init__(dataset_path=path, subject_list=subjects, event_id=event_id, code='Cho2017')
+        super().__init__(dataset_path=path, subject_list=subjects, sessions = ['session_1'], event_id=event_id, code='Cho2017')
         
         # 3. Database-specific attributes
         self.sfreq = 512
@@ -81,7 +81,6 @@ class Cho2017(BaseEEGDataset):
                         "emg":["EMG1", "EMG2", "EMG3", "EMG4"]}
         self.data_availables = ['motor_imagery', 'movement', 'rest', 'noise']
         self.data_to_load = data_to_load if data_to_load is not None else self.data_availables
-        self.sessions = ['session_1']
         self.unit_factor = 1e-6 # Convert from uV to V
         self.subjects_metadata = self._load_subjects_metadata(path = os.path.join(DATABASES_PATH, 'MNE-gigadb-data', 'gigadb-datasets', 
                                                                                 'live', 'pub', '10.5524', '100001_101000', '100295'))

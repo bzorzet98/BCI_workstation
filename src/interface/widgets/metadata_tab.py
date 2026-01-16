@@ -1,5 +1,4 @@
 import pandas as pd
-import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QComboBox, 
@@ -7,7 +6,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QComboBox,
                              QTableWidget, QTableWidgetItem, QHeaderView)
 from PyQt6.QtCore import Qt
 
-class SubjectMetadataTab(QWidget):
+class DatasetMetadata(QWidget):
     def __init__(self, session, data_manager, style_kwargs=None):
         super().__init__()
         self.session = session
