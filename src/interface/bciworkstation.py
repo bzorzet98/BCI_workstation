@@ -1,7 +1,7 @@
 import os
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QComboBox, QTabWidget, QGroupBox, QLabel, QFrame, QApplication)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPixmap
 import matplotlib.pyplot as plt
 
@@ -114,24 +114,24 @@ class BCIWorkstationGUI(QMainWindow):
         
         h_layout = QHBoxLayout(header_frame)
 
-        # Logo Loading
-        self.logo_label = QLabel()
-        if os.path.exists(self.logo_path):
-            pix = QPixmap(self.logo_path).scaled(180, 50, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            self.logo_label.setPixmap(pix)
-        else:
-            self.logo_label.setText("<b>BCI WORKSTATION</b>")
-            self.logo_label.setStyleSheet(f"font-size: 18px; color: {text_color}; font-weight: bold;")
+        # # Logo Loading
+        # self.logo_label = QLabel()
+        # if os.path.exists(self.logo_path):
+        #     pix = QPixmap(self.logo_path).scaled(180, 50, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        #     self.logo_label.setPixmap(pix)
+        # else:
+        #     self.logo_label.setText("<b>BCI WORKSTATION</b>")
+        #     self.logo_label.setStyleSheet(f"font-size: 18px; color: {text_color}; font-weight: bold;")
         
-        h_layout.addWidget(self.logo_label)
-        h_layout.addStretch()
+        # h_layout.addWidget(self.logo_label)
+        # h_layout.addStretch()
 
-        # Workspace Context Switcher (Focus)
-        h_layout.addWidget(QLabel("<b>Focus Signal:</b>"))
-        self.cb_focus_context = QComboBox()
-        self.cb_focus_context.setFixedWidth(250)
-        self.cb_focus_context.currentTextChanged.connect(self._on_focus_changed)
-        h_layout.addWidget(self.cb_focus_context)
+        # # Workspace Context Switcher (Focus)
+        # h_layout.addWidget(QLabel("<b>Focus Signal:</b>"))
+        # self.cb_focus_context = QComboBox()
+        # self.cb_focus_context.setFixedWidth(250)
+        # self.cb_focus_context.currentTextChanged.connect(self._on_focus_changed)
+        # h_layout.addWidget(self.cb_focus_context)
         
         self.main_layout.addWidget(header_frame)
 
@@ -154,9 +154,23 @@ class BCIWorkstationGUI(QMainWindow):
         self.tabs.addTab(self.tab_eda, "EDA Analysis")
 
         # Connect events
+        self.tabs.currentChanged.connect(self._on_tab_accessed)
         self.tab_workspace.dataLoaded.connect(self._on_data_loaded)
         self.tab_proc.stepApplied.connect(self.refresh_gui)
-
+        
+    def _on_tab_accessed(self, index):
+        """ This is triggered when a tab is accessed. We use it to refresh plots."""
+        label = self.tabs.tabText(index)
+        if "Time Domain" in label:
+            print("[GUI] Accessing Time Domain... refreshing plot.")
+            self.tab_time.refresh()
+        elif "Freq Domain" in label:
+            print("[GUI] Accessing Frequency Domain...")
+            self.tab_freq.refresh()
+        elif "EDA Analysis" in label:
+            print("[GUI] Accessing EDA Analysis...")
+            self.tab_eda.refresh()
+            
     def _setup_log_area(self):
         # We also style the group box title dynamically
         title_color = self.style_kwargs["text.color"]
@@ -180,20 +194,26 @@ class BCIWorkstationGUI(QMainWindow):
         if self.cb_focus_context.count() > 0:
             self.cb_focus_context.setCurrentIndex(0)
             self.session.active_context = self.cb_focus_context.currentText()
-        
+        self.tab_subject_info.refresh() # Prueba 1: Descomenta solo esta y epoquea
+        self.tab_meta.refresh()         # Prueba 2: Descomenta esta y epoquea
+        self.tab_proc.refresh_options()
         self.refresh_gui()
 
     def _on_focus_changed(self, context_name):
         if not context_name: return
         self.session.active_context = context_name
         self.refresh_gui()
-
+        
     def refresh_gui(self):
-        """Broadcasts refresh command to all sub-tabs."""
-        self.tab_meta.refresh()
-        self.tab_subject_info.refresh()
-        self.tab_proc.refresh_options()
-        self.tab_time.refresh()
-        self.tab_freq.refresh()
-        if hasattr(self.tab_eda, 'refresh'):
-            self.tab_eda.refresh()
+        """Refresco diferido para evitar bloqueos de memoria."""
+        # Usamos un timer de 50ms para asegurar que MNE liberó el puntero de memoria
+        QTimer.singleShot(50, self._do_actual_refresh)
+
+    def _do_actual_refresh(self):
+        try:
+            self.tab_subject_info.refresh()
+            self.tab_meta.refresh()
+            self.tab_proc.refresh_options() # Ahora con blockSignals no debería explotar
+            print("[GUI] Global refresh completed successfully.")
+        except Exception as e:
+            print(f"[GUI] Error during refresh: {e}")

@@ -66,6 +66,7 @@ class EEGPreprocessor:
                     kwargs['events'] = events
                     if len(events) == 0:
                         raise ValueError("No events found in data. Cannot epoch.")
+            module_name = module_name if module_name is not None else "mne"
             # 1. Dynamic Import
             method = import_class(method_name, module_name)
             data = method(data, **kwargs)

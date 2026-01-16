@@ -76,27 +76,24 @@ class DatasetMetadata(QWidget):
         layout.addWidget(self.table)
 
     # --- PUBLIC API ---
-
     def refresh(self):
-        """Loads data from the manager and populates both the dropdown and the table."""
-        ds = self.data_manager.active_dataset_instance
-        if not ds: return
-
-        df = ds.get_subject_metadata()
-        
-        # 1. Update Column Dropdown
+        """Loads data from the manager and populates display."""
+        if not self.data_manager.active_dataset_instance:
+            self.combo_col.clear()
+            self.table.setRowCount(0)
+            return
+        df = self.data_manager.active_dataset_instance.get_subject_metadata()
         self.combo_col.blockSignals(True)
         self.combo_col.clear()
-        
         if df is not None and not df.empty:
             self.combo_col.addItems(df.columns.astype(str))
-            # 2. Populate Raw Table
             self._populate_table(df)
+            print(f"[Metadata] Loaded {len(df)} rows.")
         else:
-            self.combo_col.addItem("No Metadata Found")
+            self.combo_col.addItem("No Metadata CSV Available")
             self.table.setRowCount(0)
-            self.table.setColumnCount(0)
-        
+            self.table.setColumnCount(1)
+            self.table.setItem(0, 0, QTableWidgetItem("The current dataset does not provide a metadata file."))
         self.combo_col.blockSignals(False)
         self.update_plot()
 

@@ -1,0 +1,93 @@
+{
+    "context": "motor_imagery",
+    "preprocessing_pipeline": {
+        "raw_pipeline": [
+            {
+                "type": "method",
+                "name": "filter",
+                "module_name": null,
+                "kwargs": {
+                    "l_freq": 0.4,
+                    "h_freq": 1.0,
+                    "picks": "eeg",
+                    "filter_length": "auto",
+                    "l_trans_bandwidth": "auto",
+                    "h_trans_bandwidth": "auto",
+                    "n_jobs": null,
+                    "method": "fir",
+                    "iir_params": null,
+                    "phase": "zero",
+                    "fir_window": "hamming",
+                    "fir_design": "firwin",
+                    "skip_by_annotation": [
+                        "edge",
+                        "bad_acq_skip"
+                    ],
+                    "pad": "reflect_limited",
+                    "verbose": null
+                },
+                "pipeline_stage": "raw_pipeline"
+            },
+            {
+                "type": "method",
+                "name": "notch_filter",
+                "module_name": null,
+                "kwargs": {
+                    "freqs": [
+                        60.0
+                    ],
+                    "picks": [
+                        "eeg",
+                        "emg"
+                    ],
+                    "filter_length": "auto",
+                    "notch_widths": null,
+                    "trans_bandwidth": 1.0,
+                    "n_jobs": null,
+                    "method": "fir",
+                    "iir_params": null,
+                    "mt_bandwidth": null,
+                    "p_value": 0.05,
+                    "phase": "zero",
+                    "fir_window": "hamming",
+                    "fir_design": "firwin",
+                    "pad": "reflect_limited",
+                    "skip_by_annotation": [
+                        "edge",
+                        "bad_acq_skip"
+                    ],
+                    "verbose": null
+                },
+                "pipeline_stage": "raw_pipeline"
+            }
+        ],
+        "epoching": {
+            "type": "class_init",
+            "name": "Epochs",
+            "module_name": "mne",
+            "kwargs": {
+                "event_id": {
+                    "left_hand": 1,
+                    "right_hand": 2
+                },
+                "tmin": -2.0,
+                "tmax": 3.0,
+                "baseline": null,
+                "picks": [
+                    "eeg",
+                    "emg"
+                ],
+                "preload": true,
+                "reject": null,
+                "flat": null,
+                "proj": true,
+                "decim": 4,
+                "reject_tmin": null,
+                "reject_tmax": null,
+                "detrend": null,
+                "on_missing": "raise",
+                "reject_by_annotation": true,
+                "metadata": null,
+                "event_repeated": "error",
+                "verbose": null,
+                "events": 

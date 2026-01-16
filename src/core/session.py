@@ -51,25 +51,50 @@ class SessionState:
         self.selected_channels, self.eda_report = None, None
 
     def run_transform(self, step_config: Dict[str, Any], apply_to_all: bool = False) -> bool:
-        """Applies a step and updates the structured pipeline."""
+        if not self.workspace: return False
         targets = list(self.workspace.keys()) if apply_to_all else [self.active_context]
+        
+        stage = step_config.get('pipeline_stage', 'raw_pipeline')
         
         try:
             for ctx in targets:
-                # 1. Apply logic
-                self.workspace[ctx] = self.worker.apply_single_step(self.workspace[ctx], step_config)
+                data = self.workspace[ctx]
+                if stage == "epoching":
+                    # Obtain events robustly for the specific data object
+                    events, event_id = self._get_events_for_metadata(data)
+                    
+                    if len(events) == 0:
+                        print(f"[Session] Warning: No events found for '{ctx}'. Skipping epoching.")
+                        continue 
+                    
+                    step_config['kwargs']['events'] = events
+                    step_config['kwargs']['event_id'] = event_id if step_config['kwargs']['event_id'] is None else step_config['kwargs']['event_id']
+                # ---------------------------------
+
+                # Apply the transformation
+                self.workspace[ctx] = self.worker.apply_single_step(data, step_config)
                 
-                # 2. Store in structured pipeline
-                stage = step_config.get('pipeline_stage', 'raw_pipeline')
+                # Save the step in the structured pipeline
                 if stage == 'epoching':
                     self.pipelines[ctx]['epoching'] = step_config
                 else:
                     self.pipelines[ctx][stage].append(step_config)
             return True
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"[Session] Transform Error: {e}")
             return False
 
+    def _get_events_for_metadata(self, data) -> Tuple[np.ndarray, Dict]:
+        """Obtains events and event_id from a specific data object."""
+        if not isinstance(data, mne.io.BaseRaw): return np.array([]), {}
+        try:
+            events = mne.find_events(data, stim_channel='stim', verbose=False)
+            unique_ids = np.unique(events[:, 2]) if len(events) > 0 else []
+            event_id = {str(uid): int(uid) for uid in unique_ids}
+        except:
+            events, event_id = np.array([]), {}
+        return events, event_id
+    
     def get_history_flat(self) -> List[str]:
         """
         Generates the list of strings for the GUI by flattening the pipeline dict.
@@ -244,3 +269,45 @@ class SessionState:
         except Exception as e:
             print(f"[Session] Failed to load JSON pipeline: {e}")
             return False
+        
+    def load_workspace_pipelines_from_json(self, pipeline_data: Dict[str, Any]) -> bool:
+        """
+        Applies pipelines to multiple signals in the workspace based on a JSON structure.
+        
+        Structure expected:
+        { "context_name": { "raw_pipeline": [], "epoching": {}, "epoch_pipeline": [] }, ... }
+        """
+        success_overall = True
+        
+        for ctx_name, pipeline in pipeline_data.items():
+            # Skip if this context isn't loaded in the current workspace
+            if ctx_name not in self.workspace:
+                print(f"[Session] Skipping {ctx_name}: Not found in current workspace.")
+                continue
+
+            print(f"[Session] Replaying pipeline for context: {ctx_name}")
+            
+            # Reset this specific signal before applying the new pipeline
+            self.workspace[ctx_name] = self.original_workspace[ctx_name].copy()
+            self.pipelines[ctx_name] = {"raw_pipeline": [], "epoching": None, "epoch_pipeline": []}
+
+            # Apply stages sequentially
+            stages = [('raw_pipeline', 'list'), ('epoching', 'dict'), ('epoch_pipeline', 'list')]
+            
+            for stage_name, data_type in stages:
+                steps = pipeline.get(stage_name)
+                if not steps: continue
+                
+                steps_to_run = steps if data_type == 'list' else [steps]
+                for step in steps_to_run:
+                    # Temporarily set focus to ensure correct signal is transformed
+                    old_focus = self.active_context
+                    self.active_context = ctx_name
+                    
+                    if not self.run_transform(step, apply_to_all=False):
+                        print(f"  [!] Failed at {stage_name} for {ctx_name}")
+                        success_overall = False
+                    
+                    self.active_context = old_focus
+                    
+        return success_overall

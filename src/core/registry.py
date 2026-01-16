@@ -27,22 +27,24 @@ class Registry:
     ]
 
     @staticmethod
-    def get_available_steps(data_type):
+    def get_available_steps(data_obj):
         """
-        Returns a list of available actions based on whether data is Raw or Epochs.
+        Returns a list of available actions based on data type.
         """
         methods = []
-        if isinstance(data_type, mne.io.BaseRaw) or data_type == 'raw':
-            methods = [{'name': m, 'type': 'method'} for m in Registry.ALLOWED_RAW_METHODS]
-            
-            # EXPLICITLY ADD EPOCHING AS A SPECIAL ACTION FOR RAW DATA
-            methods.append({'name': 'Epochs', 'type': 'class_init'}) 
-
-        elif isinstance(data_type, mne.Epochs) or data_type == 'epochs':
-            methods = [{'name': m, 'type': 'method'} for m in Registry.ALLOWED_EPOCH_METHODS]
-            
-        functions = [{'name': f, 'type': 'function'} for f in Registry.CUSTOM_FUNCTIONS]
         
+        # Usamos nombres de clase en string para máxima compatibilidad
+        type_str = str(type(data_obj)).lower()
+        
+        methods = []
+
+        if "raw" in type_str:
+            methods = [{'name': m, 'type': 'method'} for m in Registry.ALLOWED_RAW_METHODS]
+            methods.append({'name': 'Epochs', 'type': 'class_init'}) 
+        elif "epochs" in type_str:
+            methods = [{'name': m, 'type': 'method'} for m in Registry.ALLOWED_EPOCH_METHODS]
+        
+        functions = [{'name': f, 'type': 'function'} for f in Registry.CUSTOM_FUNCTIONS]
         return methods + functions
     
     @staticmethod
@@ -61,9 +63,10 @@ class Registry:
                 # Ignoramos argumentos internos del sistema
                 if name in ['self', 'kwargs', 'args']:
                     continue
-                
+
                 # Si no tiene valor por defecto, ponemos None
                 val = param.default if param.default is not inspect.Parameter.empty else None
+
                 params[name] = val
                 
             return params
@@ -142,8 +145,12 @@ class Registry:
             # HANDLE *args (usually skippable for GUI, but can default to empty tuple)
             if param.kind == inspect.Parameter.VAR_POSITIONAL:
                 continue
-
+            
             val = param.default if param.default is not inspect.Parameter.empty else None
+            
+            if name == 'Epochs' and param_name == 'preload':
+                val = True # Set default to True specifically for Epoching
+                
             defaults[param_name] = val
             
         return defaults

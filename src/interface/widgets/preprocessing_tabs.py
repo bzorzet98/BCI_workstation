@@ -1,187 +1,347 @@
 import ast
+import json
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QComboBox, QPushButton, QScrollArea, QLineEdit, 
-                             QFormLayout, QMessageBox, QFrame)
-from PyQt6.QtCore import pyqtSignal, Qt
+                             QFormLayout, QMessageBox, QFrame, QTabWidget, 
+                             QListWidget, QCheckBox, QFileDialog, QGroupBox,QApplication,
+                             QDialog, QDialogButtonBox)
+from PyQt6.QtCore import pyqtSignal, QTimer, Qt
 from src.core.registry import Registry
 
 class ProcessingTab(QWidget):
+    """
+    Main Preprocessing Widget.
+    Layout:
+    - Top (Persistent): Target Signal selection.
+    - Center (Tabs): Build Pipeline vs Management/History.
+    """
     stepApplied = pyqtSignal()
 
     def __init__(self, session, style_kwargs=None):
         super().__init__()
         self.session = session
-        self.style_kwargs = style_kwargs
-        self.inputs = {} # Stores QLineEdit objects for the dynamic form
-        
+        self.style_kwargs = style_kwargs or {}
+        self.inputs = {} 
+
         self._init_ui()
 
     def _init_ui(self):
-        """Initializes the layout structure."""
-        layout = QVBoxLayout(self)
+        """Builds the persistent header and the internal tab system."""
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(10, 10, 10, 10)
 
-        # 1. HEADER: Stage & Step Selection
-        selection_frame = QFrame()
-        sel_layout = QVBoxLayout(selection_frame)
+        # ==========================================
+        # 1. PERSISTENT HEADER (Always Visible)
+        # ==========================================
+        header_group = QGroupBox("Active Workspace Control")
+        h_layout = QHBoxLayout(header_group)
         
-        # Target Stage
-        h_stage = QHBoxLayout()
-        h_stage.addWidget(QLabel("<b>Target Stage:</b>"))
+        self.cb_target_signal = QComboBox()
+        self.cb_target_signal.setFixedWidth(300)
+        self.cb_target_signal.currentTextChanged.connect(self._on_context_switched)
+        
+        h_layout.addWidget(QLabel("<b>Focus Signal:</b>"))
+        h_layout.addWidget(self.cb_target_signal)
+        h_layout.addStretch()
+        
+        self.main_layout.addWidget(header_group)
+
+        # ==========================================
+        # 2. INTERNAL TABS (Configuration vs History)
+        # ==========================================
+        self.internal_tabs = QTabWidget()
+        
+        # Sub-Tab A: Pipeline Builder
+        self.tab_build = QWidget()
+        self._setup_build_tab()
+        
+        # Sub-Tab B: History & Management
+        self.tab_history = QWidget()
+        self._setup_history_tab()
+
+        self.internal_tabs.addTab(self.tab_build, "1. Configure Pipeline")
+        self.internal_tabs.addTab(self.tab_history, "2. History & Management")
+        
+        self.main_layout.addWidget(self.internal_tabs)
+
+    def _setup_build_tab(self):
+        """UI for selecting functions and configuring parameters."""
+        layout = QVBoxLayout(self.tab_build)
+        
+        # Selectors
+        sel_frame = QFrame()
+        sel_lay = QFormLayout(sel_frame)
+        
         self.combo_stage = QComboBox()
         self.combo_stage.addItems(["raw_pipeline", "epoching", "epoch_pipeline"])
         self.combo_stage.currentTextChanged.connect(self.on_stage_changed)
-        h_stage.addWidget(self.combo_stage)
-        sel_layout.addLayout(h_stage)
-
-        # Function/Method Selector
-        sel_layout.addWidget(QLabel("<b>Select Function/Method:</b>"))
+        
         self.combo_steps = QComboBox()
         self.combo_steps.currentIndexChanged.connect(self.on_step_selected)
-        sel_layout.addWidget(self.combo_steps)
         
-        layout.addWidget(selection_frame)
+        sel_lay.addRow("Pipeline Stage:", self.combo_stage)
+        sel_lay.addRow("Select Function:", self.combo_steps)
+        layout.addWidget(sel_frame)
 
-        # 2. BODY: Dynamic Form (Scrollable)
+        # Dynamic Parameters Scroll
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setStyleSheet("background-color: #f8f9fa; border: 1px solid #dee2e6;")
-        
         self.form_container = QWidget()
         self.form_layout = QFormLayout(self.form_container)
         self.scroll.setWidget(self.form_container)
-        
         layout.addWidget(self.scroll)
 
-        # 3. FOOTER: Apply Action
-        self.btn_apply = QPushButton("Add Step & Run")
+        # Broadcasting
+        self.chk_apply_all = QCheckBox("Apply this step to ALL loaded signals in workspace")
+        self.chk_apply_all.setStyleSheet("color: #d32f2f; font-weight: bold;")
+        layout.addWidget(self.chk_apply_all)
+
+        # Action
+        self.btn_apply = QPushButton("Apply Step & Run")
         self.btn_apply.setFixedHeight(40)
-        self.btn_apply.setStyleSheet("""
-            QPushButton { background-color: #2196F3; color: white; font-weight: bold; border-radius: 4px; }
-            QPushButton:hover { background-color: #1976D2; }
-        """)
+        self.btn_apply.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold;")
         self.btn_apply.clicked.connect(self.apply_step)
         layout.addWidget(self.btn_apply)
 
-    # --- PUBLIC API ---
+    def _setup_history_tab(self):
+        """UI for viewing history and Export/Import JSON."""
+        layout = QVBoxLayout(self.tab_history)
+        
+        self.list_history = QListWidget()
+        layout.addWidget(QLabel("<b>Specific Pipeline History for Focus Signal:</b>"))
+        layout.addWidget(self.list_history)
+
+        # Undo/Reset
+        h_btns = QHBoxLayout()
+        btn_undo = QPushButton("Undo Last Step"); btn_undo.clicked.connect(self._undo)
+        btn_reset = QPushButton("Reset Focused Signal"); btn_reset.setStyleSheet("color: red;")
+        btn_reset.clicked.connect(self._reset)
+        h_btns.addWidget(btn_undo); h_btns.addWidget(btn_reset)
+        layout.addLayout(h_btns)
+
+        # JSON IO
+        grp_io = QGroupBox("Pipeline Transfer (JSON)")
+        v_io = QVBoxLayout(grp_io)
+        btn_import = QPushButton("Import JSON Pipeline")
+        btn_export = QPushButton("Export Focused Pipeline to JSON")
+        btn_import.clicked.connect(self._import_json)
+        btn_export.clicked.connect(self._export_json)
+        v_io.addWidget(btn_import); v_io.addWidget(btn_export)
+        layout.addWidget(grp_io)
+
+    # --- CORE SYNC LOGIC ---
 
     def refresh_options(self):
-        """Called by the main controller when data is loaded."""
+        """Synchronizes the persistent signal switcher with the session workspace."""
+        if not self.session.workspace: return
+        
+        self.cb_target_signal.blockSignals(True)
+        self.cb_target_signal.clear()
+        self.cb_target_signal.addItems(list(self.session.workspace.keys()))
+        
+        if self.session.active_context:
+            self.cb_target_signal.setCurrentText(self.session.active_context)
+        self.cb_target_signal.blockSignals(False)
+
         self.on_stage_changed(self.combo_stage.currentText())
 
-    # --- EVENT HANDLERS ---
+    def _on_context_switched(self, ctx_name):
+        """Fired when switching signals in the persistent header."""
+        if not ctx_name: return
+        self.session.active_context = ctx_name
+        self._refresh_history_list()
+        # Update parameters form to show valid options for Raw vs Epochs
+        self.on_stage_changed(self.combo_stage.currentText())
+        # Refresh visuals in other tabs
+        self.stepApplied.emit()
+
+    def _refresh_history_list(self):
+        """Populates the list with the pipeline steps of the focused context."""
+        self.list_history.clear()
+        for txt in self.session.get_history_flat():
+            self.list_history.addItem(txt)
+
+    # --- ACTION HANDLERS ---
+
+    def apply_step(self):
+        if not self.session.current_data: return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.btn_apply.setEnabled(False)
+        
+        try:
+            step_data = self.combo_steps.currentData()
+            args = self._extract_form_data()
+            if step_data['name'] == 'Epochs' and step_data['type'] == 'class_init':
+                module_name = "mne"
+            elif step_data['type'] == 'function':
+                module_name = "src.preprocessing.preprocessing_functions"
+            else:
+                module_name = None
+            config = {
+                "type": step_data['type'],
+                "name": step_data['name'],
+                "module_name": module_name,
+                "kwargs": args,
+                "pipeline_stage": self.combo_stage.currentText()
+            }
+
+            
+            success = self.session.run_transform(config, apply_to_all=self.chk_apply_all.isChecked())
+            if success:
+                self._refresh_history_list() 
+                self.stepApplied.emit() # Habilitamos el timbre
+
+            #     # --- SOLUCIÓN AL CRASH: REFRESCO DIFERIDO ---
+            #     # QTimer.singleShot(10, self.stepApplied.emit)
+            #     # QTimer.singleShot(20, self._refresh_history_list)
+            #     # QTimer.singleShot(30, lambda: self.on_stage_changed(self.combo_stage.currentText()))
+            # else:
+            #     QMessageBox.warning(self, "Error", "Transform failed.")
+                
+        except Exception as e:
+            print(f"[Processing] Error: {e}")
+        finally:
+            self.btn_apply.setEnabled(True)
+            QApplication.restoreOverrideCursor()
+            
+    def _undo(self):
+        if self.session.undo_last_step():
+            self.stepApplied.emit()
+            self._refresh_history_list()
+
+    def _reset(self):
+        if self.session.reset_pipeline(only_active=True):
+            self.stepApplied.emit()
+            self._refresh_history_list()
+
+    def _export_json(self):
+        """Exports all pipelines in the workspace and database metadata."""
+        if not self.session.workspace: return
+
+        # 1. Open a Dialog to get Metadata (Name/Description)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Export Workspace Configuration")
+        form = QFormLayout(dialog)
+        le_name = QLineEdit("custom_pipeline")
+        le_desc = QLineEdit("Created via BCI Workstation")
+        form.addRow("Pipeline Name:", le_name)
+        form.addRow("Description:", le_desc)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dialog.accept); btns.rejected.connect(dialog.reject)
+        form.addRow(btns)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            path, _ = QFileDialog.getSaveFileName(self, "Save JSON", f"{le_name.text()}.json", "JSON (*.json)")
+            if not path: return
+
+            # 1. DEEP COPY the pipelines to avoid modifying the live session state
+            import copy
+            cleaned_pipelines = copy.deepcopy(self.session.pipelines)
+
+            # 2. SANITIZE: Remove large NumPy arrays from the 'epoching' step
+            for ctx_name, pipe in cleaned_pipelines.items():
+                epoch_step = pipe.get('epoching')
+                if epoch_step and 'kwargs' in epoch_step:
+                    epoch_step['kwargs']['events'] = None
+
+            # 3. Build the structure
+            export_data = {
+                "preprocessing_name": le_name.text(),
+                "description": le_desc.text(),
+                "database": {
+                    "class_name": self.session.dataset_name,
+                    "module_name": "src.eeg_datasets", 
+                    "kwargs": {"data_to_load": list(self.session.workspace.keys())}
+                },
+                "preprocessing_pipeline": cleaned_pipelines 
+            }
+
+            try:
+                with open(path, 'w') as f:
+                    json.dump(export_data, f, indent=4)
+                QMessageBox.information(self, "Success", "Cleaned pipeline exported.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed: {e}")
+                
+    def _import_json(self):
+        """Imports pipelines and maps them to existing workspace contexts."""
+        path, _ = QFileDialog.getOpenFileName(self, "Import JSON", "", "JSON (*.json)")
+        if not path: return
+
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+            
+            # Identify where the pipeline dictionary is
+            pipeline_dict = data.get('preprocessing_pipeline', data)
+
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            
+            # Apply using the new Session method
+            success = self.session.load_workspace_pipelines_from_json(pipeline_dict)
+            
+            QApplication.restoreOverrideCursor()
+
+            if success:
+                self.stepApplied.emit()
+                self._refresh_history_list()
+                QMessageBox.information(self, "Import Successful", "Workspace pipelines updated for available contexts.")
+            else:
+                QMessageBox.warning(self, "Import Partial", "Some steps failed. Check logs.")
+
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Error", f"Could not parse JSON: {e}")
+
+    # --- REUSED HELPERS (Registry/Form) ---
 
     def on_stage_changed(self, stage_name):
-        """Handles logic when switching between pipeline stages."""
         if not self.session.current_data: return
-
-        self.combo_steps.blockSignals(True)
-        self.combo_steps.clear()
-
+        self.combo_steps.blockSignals(True); self.combo_steps.clear()
         if stage_name == "epoching":
-            # --- TRANSITION TO EPOCHS ---
-            epoch_data = {"name": "Epochs", "type": "class_init"}
-            self.combo_steps.addItem("mne.Epochs (Transition)", userData=epoch_data)
-            self.combo_steps.setEnabled(False) 
-            self._build_form("Epochs", "class_init")
+            self.combo_steps.addItem("mne.Epochs (Transition)", userData={"name": "Epochs", "type": "class_init"})
+            self.combo_steps.setEnabled(False); self._build_form("Epochs", "class_init")
         else:
-            # --- STANDARD METHODS ---
             self.combo_steps.setEnabled(True)
             avail_steps = Registry.get_available_steps(self.session.current_data)
-            
             for step in avail_steps:
-                # Hide transition methods from standard selection
                 if step['name'] in ['Epochs', 'convert_to_epochs']: continue
                 self.combo_steps.addItem(f"{step['name']} ({step['type']})", userData=step)
-            
-            if self.combo_steps.count() > 0:
-                self.on_step_selected()
+            if self.combo_steps.count() > 0: 
+                self.combo_steps.setCurrentIndex(0)
+                step_data = self.combo_steps.itemData(0)
+                self._build_form(step_data['name'], step_data['type'])
             else:
                 self._clear_form()
-
         self.combo_steps.blockSignals(False)
 
     def on_step_selected(self):
-        """Triggers form rebuild when the user selects a different method."""
-        step_data = self.combo_steps.currentData()
-        if step_data:
-            self._build_form(step_data['name'], step_data['type'])
-
-    # --- UI HELPERS ---
+        data = self.combo_steps.currentData()
+        if data: self._build_form(data['name'], data['type'])
 
     def _build_form(self, name, step_type):
-        """Fetches arguments from Registry and creates input fields."""
         self._clear_form()
         defaults = Registry.get_defaults(name, step_type)
-        
-        if not defaults:
-            msg = "Epochs parameters error" if step_type == 'class_init' else "No arguments required."
-            self.form_layout.addRow(QLabel(msg), QLabel(""))
-            return
-
+        if not defaults: return
         for arg, val in defaults.items():
-            # Skip internal MNE/Python arguments
             if arg in ['self', 'raw', 'events', 'epochs', 'data', 'inst']: continue
-            
-            lbl = QLabel(str(arg))
-            # Convert None to "None" string for the UI
-            display_val = str(val) if val is not None else "None"
-            le = QLineEdit(display_val)
-            le.setStyleSheet("background-color: white; border: 1px solid #ced4da; padding: 4px;")
-            
-            self.form_layout.addRow(lbl, le)
-            self.inputs[arg] = le
+            le = QLineEdit(str(val) if val is not None else "None")
+            self.form_layout.addRow(QLabel(str(arg)), le); self.inputs[arg] = le
 
     def _clear_form(self):
-        """Safely removes all widgets from the dynamic form."""
         while self.form_layout.count():
             item = self.form_layout.takeAt(0)
-            if item.widget(): 
-                item.widget().deleteLater()
+            if item.widget(): item.widget().deleteLater()
         self.inputs = {}
 
     def _extract_form_data(self):
-        """Parses UI inputs and flattens 'kwargs' dictionaries."""
         data = {}
         for arg, le in self.inputs.items():
             txt = le.text().strip()
-            try: 
-                # Convert strings like "[1, 2]" or "0.5" into Python types
-                val = ast.literal_eval(txt)
-            except: 
-                val = txt # Fallback to raw string
+            try: val = ast.literal_eval(txt)
+            except: val = txt
             data[arg] = val
-            
-        # Handle Nested Kwargs: If the user provided a dict in the 'kwargs' field, flatten it
         if 'kwargs' in data:
             extra = data.pop('kwargs')
-            if isinstance(extra, dict):
-                data.update(extra)
-        
+            if isinstance(extra, dict): data.update(extra)
         return data
-
-    # --- CONTROLLER LOGIC ---
-
-    def apply_step(self):
-        """Constructs the step configuration and sends it to the SessionState."""
-        if not self.session.current_data: return
-        
-        # 1. Prepare Data
-        args = self._extract_form_data()
-        step_data = self.combo_steps.currentData()
-        
-        # 2. Build Pipeline Configuration
-        is_custom = step_data['type'] == 'function'
-        config = {
-            "type": step_data['type'],
-            "name": step_data['name'],
-            "module_name": "src.preprocessing.preprocessing_functions" if is_custom else None,
-            "kwargs": args,
-            "pipeline_stage": self.combo_stage.currentText()
-        }
-        
-        # 3. Execute and Notify
-        if self.session.run_transform(config):
-            self.stepApplied.emit()
-            self.refresh_options()
-        else:
-            QMessageBox.warning(self, "Transform Failed", f"Could not apply {step_data['name']}.")
