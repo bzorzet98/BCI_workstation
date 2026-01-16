@@ -86,15 +86,12 @@ class DataManager:
 
     def load_data(self, subject_id: int, contexts: List[str], session_id: Optional[str] = None) -> Tuple[Dict[str, mne.io.BaseRaw], Dict[str, Any]]:
         """
-        Loads multiple signals and extracts subject extra information.
-        
-        Returns:
-            Tuple: (Workspace signals dict, Subject extra information dict)
+        Loads multiple signals and FLATTENS sub-structures (Runs/Noise Types) 
+        into individual workspace entries.
         """
         if not self.active_dataset_instance:
             raise RuntimeError("No dataset loaded.")
 
-        # 1. Fetch full data dictionary
         full_data_dict = self.active_dataset_instance.get_data(
             subjects=[subject_id], 
             data_to_load=contexts
@@ -102,38 +99,37 @@ class DataManager:
         
         if not full_data_dict or subject_id not in full_data_dict:
             return {}, {}
-        # 2. Extract and flatten the nested structure
-        try:
-            # 2. Extract Extra Info (found as a sibling to session keys)
-            subject_entry = full_data_dict[subject_id]
-            extra_info = subject_entry.get('extra_info', {})
 
-            # 3. Handle Session Selection
-            # If no session specified, take the first one available
-            if session_id is None:
-                available_sessions = [k for k in subject_entry.keys() if k.startswith('session')]
-                session_id = available_sessions[0] if available_sessions else None
+        subject_entry = full_data_dict[subject_id]
+        extra_info = subject_entry.get('extra_info', {})
 
-            if not session_id or session_id not in subject_entry:
-                print(f"[DataManager] Error: Session {session_id} not found.")
-                return {}, extra_info
+        # Resolve Session
+        if session_id is None:
+            available_sessions = [k for k in subject_entry.keys() if k.startswith('session')]
+            session_id = available_sessions[0] if available_sessions else None
 
-            session_content = subject_entry[session_id]
-            workspace_raws = {}
+        if not session_id or session_id not in subject_entry:
+            return {}, extra_info
 
-            # 4. Flatten structure
-            for ctx_label in contexts:
-                if ctx_label in session_content:
-                    runs = session_content[ctx_label]
-                    first_run_key = list(runs.keys())[0]
-                    raw_obj = runs[first_run_key]
+        session_content = subject_entry[session_id]
+        workspace_raws = {}
+
+        # --- NEW DEEP-FLATTENING LOGIC ---
+        for context_label in contexts:
+            if context_label in session_content:
+                runs_dict = session_content[context_label]
+                
+                # Check how many sub-items (runs/noise types) this context has
+                sub_items = list(runs_dict.keys())
+                
+                for sub_key in sub_items:
+                    raw_obj = runs_dict[sub_key]
+                    workspace_name = f"{context_label}:{sub_key}"
                     
+                    # Extraction
                     if isinstance(raw_obj, dict) and 'recording' in raw_obj:
-                        workspace_raws[ctx_label] = raw_obj['recording']
+                        workspace_raws[workspace_name] = raw_obj['recording']
                     elif isinstance(raw_obj, mne.io.BaseRaw):
-                        workspace_raws[ctx_label] = raw_obj
-
-            return workspace_raws, extra_info
-        except Exception as e:
-            print(f"[DataManager] Critical error parsing data structure: {e}")
-            return {}
+                        workspace_raws[workspace_name] = raw_obj
+                        
+        return workspace_raws, extra_info

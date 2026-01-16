@@ -54,7 +54,6 @@ class BCIWorkstationGUI(QMainWindow):
                 "text.color": "#333333"
             }
             self.logo_path = os.path.join("src", "interface", "logo", "logo_system.png")
-            
         else: # DEFAULT: ACADEMIC
             self.setStyleSheet(STYLESHEET_ACADEMIC)
             self.style_kwargs = {
@@ -83,57 +82,13 @@ class BCIWorkstationGUI(QMainWindow):
         self.main_layout = QVBoxLayout(central_widget)
         self.main_layout.setContentsMargins(0, 0, 0, 0) # Edge-to-edge look
 
-        # 1. PERMANENT HEADER
-        self._setup_header()
-
-        # 2. CENTRAL TABS
+        # Main Tab Container (occupies the top area)
         self.tabs = QTabWidget()
         self._setup_tabs()
         self.main_layout.addWidget(self.tabs, stretch=4)
 
-        # 3. PERMANENT LOG CONSOLE
+        # Log Console (stays at the bottom)
         self._setup_log_area()
-
-    def _setup_header(self):
-        """Creates the header using dynamic colors from style_kwargs."""
-        header_frame = QFrame()
-        header_frame.setFixedHeight(70)
-        
-        # DYNAMIC STYLING from dictionary
-        bg_color = self.style_kwargs["figure.facecolor"]
-        border_color = self.style_kwargs["axes.edgecolor"]
-        text_color = self.style_kwargs["axes.labelcolor"]
-        
-        header_frame.setStyleSheet(f"""
-            QFrame {{ 
-                background-color: {bg_color}; 
-                border-bottom: 1px solid {border_color}; 
-            }}
-            QLabel {{ border: none; color: {text_color}; }}
-        """)
-        
-        h_layout = QHBoxLayout(header_frame)
-
-        # # Logo Loading
-        # self.logo_label = QLabel()
-        # if os.path.exists(self.logo_path):
-        #     pix = QPixmap(self.logo_path).scaled(180, 50, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        #     self.logo_label.setPixmap(pix)
-        # else:
-        #     self.logo_label.setText("<b>BCI WORKSTATION</b>")
-        #     self.logo_label.setStyleSheet(f"font-size: 18px; color: {text_color}; font-weight: bold;")
-        
-        # h_layout.addWidget(self.logo_label)
-        # h_layout.addStretch()
-
-        # # Workspace Context Switcher (Focus)
-        # h_layout.addWidget(QLabel("<b>Focus Signal:</b>"))
-        # self.cb_focus_context = QComboBox()
-        # self.cb_focus_context.setFixedWidth(250)
-        # self.cb_focus_context.currentTextChanged.connect(self._on_focus_changed)
-        # h_layout.addWidget(self.cb_focus_context)
-        
-        self.main_layout.addWidget(header_frame)
 
     def _setup_tabs(self):
         # We pass self.style_kwargs to EVERY tab so their Matplotlib plots match the theme
@@ -181,27 +136,12 @@ class BCIWorkstationGUI(QMainWindow):
         self.console = LogConsole()
         v_log.addWidget(self.console)
         self.main_layout.addWidget(grp_log, stretch=1)
-
     # --- CONTROLLER LOGIC ---
 
     def _on_data_loaded(self):
-        """Populates the focus switcher with the new workspace contexts."""
-        self.cb_focus_context.blockSignals(True)
-        self.cb_focus_context.clear()
-        self.cb_focus_context.addItems(list(self.session.workspace.keys()))
-        self.cb_focus_context.blockSignals(False)
-        
-        if self.cb_focus_context.count() > 0:
-            self.cb_focus_context.setCurrentIndex(0)
-            self.session.active_context = self.cb_focus_context.currentText()
         self.tab_subject_info.refresh() # Prueba 1: Descomenta solo esta y epoquea
         self.tab_meta.refresh()         # Prueba 2: Descomenta esta y epoquea
         self.tab_proc.refresh_options()
-        self.refresh_gui()
-
-    def _on_focus_changed(self, context_name):
-        if not context_name: return
-        self.session.active_context = context_name
         self.refresh_gui()
         
     def refresh_gui(self):

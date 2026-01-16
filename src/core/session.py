@@ -1,6 +1,7 @@
 import numpy as np
 import json
 import mne
+import copy
 from typing import List, Dict, Optional, Any, Union, Tuple 
 from src.preprocessing import EEGPreprocessor
 
@@ -21,79 +22,146 @@ class SessionState:
         self.extra_info: Dict[str, Any] = {}
         
         # Source of Truth for processing: {context_label: structured_pipeline_dict}
+        self.logical_keys: List[str] = [] 
         self.pipelines: Dict[str, Dict[str, Any]] = {}
         
         self.eda_report: Optional[Dict[str, Any]] = None
         self.worker = EEGPreprocessor() # Assuming it's imported
 
     @property
-    def current_data(self):
-        return self.workspace.get(self.active_context)
+    def current_data(self) -> Optional[Union[mne.io.BaseRaw, mne.Epochs]]:
+        """
+        Smart pointer to the data. 
+        If active_context is 'motor_imagery' (logical), it returns 
+        the data for 'motor_imagery:run_1' (physical).
+        """
+        if not self.active_context:
+            return None
+            
+        # 1. Try direct match (for Noise or single signals)
+        if self.active_context in self.workspace:
+            return self.workspace[self.active_context]
+            
+        # 2. Try group match (Find the first run that belongs to this group)
+        # Search for any key that starts with "logical_key:"
+        prefix = f"{self.active_context}:"
+        for key in self.workspace.keys():
+            if key.startswith(prefix):
+                return self.workspace[key]
+                
+        return None
 
     @property
     def current_pipeline(self):
         return self.pipelines.get(self.active_context, {})
 
-    def load_data(self, data_dict: Dict[str, mne.io.BaseRaw], ds_name: str, sub_id: int, extra_info: Dict[str, Any] = {}):
-        """Initializes the workspace and sets up a pipeline for each context."""
+    def load_data(self, data_dict: Dict[str, mne.io.BaseRaw], ds_name: str, sub_id: int, extra_info: Dict):
+        """Initializes the workspace and sets up logical pipeline groups."""
         self.original_workspace = {ctx: raw.copy() for ctx, raw in data_dict.items()}
         self.workspace = data_dict
         self.extra_info = extra_info
         
-        # Reset pipelines for each context
+        # 1. Calcular llaves lógicas para Preprocesamiento
+        self._calculate_logical_keys()
+        
+        # 2. Inicializar Pipelines usando las llaves lógicas
         self.pipelines = {
-            ctx: {"raw_pipeline": [], "epoching": None, "epoch_pipeline": []} 
-            for ctx in data_dict.keys()
+            lk: {"raw_pipeline": [], "epoching": None, "epoch_pipeline": []} 
+            for lk in self.logical_keys
         }
         
-        self.active_context = list(data_dict.keys())[0] if data_dict else None
+        # Foco inicial (la primera llave lógica)
+        self.active_context = self.logical_keys[0] if self.logical_keys else None
+        
         self.dataset_name, self.subject_id = ds_name, sub_id
         self.selected_channels, self.eda_report = None, None
 
+        
+    def _calculate_logical_keys(self):
+        """
+        Internal method:
+        - Tasks (MI, Movement, Rest): Grouped by base name.
+        - Noise: Kept individual with colon (noise:blink).
+        """
+        unique_keys = set()
+        for key in self.workspace.keys():
+            if ":" in key and "noise" not in key.lower():
+                # motor_imagery:run_1 -> motor_imagery
+                unique_keys.add(key.split(":")[0])
+            else:
+                # noise:eye_blink o rest -> se queda igual
+                unique_keys.add(key)
+        
+        self.logical_keys = sorted(list(unique_keys))
+
     def run_transform(self, step_config: Dict[str, Any], apply_to_all: bool = False) -> bool:
         if not self.workspace: return False
-        targets = list(self.workspace.keys()) if apply_to_all else [self.active_context]
         
-        stage = step_config.get('pipeline_stage', 'raw_pipeline')
-        
-        try:
-            for ctx in targets:
-                data = self.workspace[ctx]
-                if stage == "epoching":
-                    # Obtain events robustly for the specific data object
-                    events, event_id = self._get_events_for_metadata(data)
-                    
-                    if len(events) == 0:
-                        print(f"[Session] Warning: No events found for '{ctx}'. Skipping epoching.")
-                        continue 
-                    
-                    step_config['kwargs']['events'] = events
-                    step_config['kwargs']['event_id'] = event_id if step_config['kwargs']['event_id'] is None else step_config['kwargs']['event_id']
-                # ---------------------------------
+        # Identificamos qué señales físicas se verán afectadas
+        if apply_to_all:
+            physical_targets = list(self.workspace.keys())
+            # Si aplicamos a todo, usamos una llave genérica para el log o la primera
+            pipeline_key = self.logical_keys[0] 
+        else:
+            # Si el foco es 'motor_imagery', targets son 'motor_imagery:run_1', 'run_2'...
+            selected = self.active_context
+            if selected in self.workspace: # Caso de Noise o señal única
+                physical_targets = [selected]
+            else: # Caso de Grupo (MI/Movement)
+                physical_targets = [k for k in self.workspace.keys() if k.startswith(f"{selected}:")]
+            
+            pipeline_key = selected
 
-                # Apply the transformation
-                self.workspace[ctx] = self.worker.apply_single_step(data, step_config)
+        stage = step_config.get('pipeline_stage', 'raw_pipeline')
+
+        try:
+            for ctx in physical_targets:
+                current_config = copy.deepcopy(step_config)
                 
-                # Save the step in the structured pipeline
-                if stage == 'epoching':
-                    self.pipelines[ctx]['epoching'] = step_config
-                else:
-                    self.pipelines[ctx][stage].append(step_config)
+                # --- MANEJO DE EVENTOS (Independiente por señal) ---
+                if stage == "epoching":
+                    events, event_id = self.obtain_events_for_data(self.workspace[ctx])
+                    if len(events) == 0: continue
+                    current_config['kwargs']['events'] = events
+                    current_config['kwargs']['event_id'] = event_id
+
+                # APLICAR TRANSFORMACIÓN
+                result = self.worker.apply_single_step(self.workspace[ctx], current_config)
+                
+                if result is not None:
+                    # --- FIX PARA EL CRASH DE MNE (Length is unknown) ---
+                    if isinstance(result, mne.BaseEpochs):
+                        result.drop_bad() 
+                    
+                    self.workspace[ctx] = result
+
+            # ACTUALIZAR PIPELINE (JSON) - Solo una vez por grupo lógico
+            if stage == 'epoching':
+                clean_config = copy.deepcopy(step_config)
+                clean_config['kwargs']['events'] = None # Para que el JSON sea ligero
+                self.pipelines[pipeline_key]['epoching'] = clean_config
+            else:
+                self.pipelines[pipeline_key][stage].append(step_config)
+            
             return True
         except Exception as e:
             print(f"[Session] Transform Error: {e}")
             return False
 
-    def _get_events_for_metadata(self, data) -> Tuple[np.ndarray, Dict]:
-        """Obtains events and event_id from a specific data object."""
-        if not isinstance(data, mne.io.BaseRaw): return np.array([]), {}
+    def obtain_events_for_data(self, data):
+        """Helper robusto para obtener eventos de cualquier señal del workspace."""
         try:
-            events = mne.find_events(data, stim_channel='stim', verbose=False)
-            unique_ids = np.unique(events[:, 2]) if len(events) > 0 else []
-            event_id = {str(uid): int(uid) for uid in unique_ids}
+            events, event_id = mne.events_from_annotations(data, verbose=False)
         except:
-            events, event_id = np.array([]), {}
+            # Fallback a stim channel
+            try:
+                events = mne.find_events(data, stim_channel='stim', verbose=False)
+                u_ids = np.unique(events[:, 2]) if len(events) > 0 else []
+                event_id = {str(uid): int(uid) for uid in u_ids}
+            except:
+                return np.array([]), {}
         return events, event_id
+
     
     def get_history_flat(self) -> List[str]:
         """

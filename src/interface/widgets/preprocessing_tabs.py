@@ -25,30 +25,13 @@ class ProcessingTab(QWidget):
 
         self._init_ui()
 
+
     def _init_ui(self):
-        """Builds the persistent header and the internal tab system."""
+        """Initializes the layout using QTabWidget with a Corner Widget."""
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(10, 10, 10, 10)
+        self.main_layout.setContentsMargins(5, 5, 5, 5)
 
-        # ==========================================
-        # 1. PERSISTENT HEADER (Always Visible)
-        # ==========================================
-        header_group = QGroupBox("Active Workspace Control")
-        h_layout = QHBoxLayout(header_group)
-        
-        self.cb_target_signal = QComboBox()
-        self.cb_target_signal.setFixedWidth(300)
-        self.cb_target_signal.currentTextChanged.connect(self._on_context_switched)
-        
-        h_layout.addWidget(QLabel("<b>Focus Signal:</b>"))
-        h_layout.addWidget(self.cb_target_signal)
-        h_layout.addStretch()
-        
-        self.main_layout.addWidget(header_group)
-
-        # ==========================================
-        # 2. INTERNAL TABS (Configuration vs History)
-        # ==========================================
+        # 1. CREATE INTERNAL TAB SYSTEM
         self.internal_tabs = QTabWidget()
         
         # Sub-Tab A: Pipeline Builder
@@ -59,8 +42,24 @@ class ProcessingTab(QWidget):
         self.tab_history = QWidget()
         self._setup_history_tab()
 
-        self.internal_tabs.addTab(self.tab_build, "1. Configure Pipeline")
-        self.internal_tabs.addTab(self.tab_history, "2. History & Management")
+        self.internal_tabs.addTab(self.tab_build, "Configure Pipeline")
+        self.internal_tabs.addTab(self.tab_history, "History & Management")
+
+        # 2. CREATE CORNER WIDGET (The Focus Signal Switcher)
+        corner_container = QWidget()
+        h_corner = QHBoxLayout(corner_container)
+        h_corner.setContentsMargins(10, 0, 10, 0)
+        
+        lbl_focus = QLabel("<b>Focus Signal:</b>")
+        self.cb_target_signal = QComboBox()
+        self.cb_target_signal.setFixedWidth(200)
+        self.cb_target_signal.currentTextChanged.connect(self._on_context_switched)
+        
+        h_corner.addWidget(lbl_focus)
+        h_corner.addWidget(self.cb_target_signal)
+        
+        # Set to Top Right of the tab bar
+        self.internal_tabs.setCornerWidget(corner_container, Qt.Corner.TopRightCorner)
         
         self.main_layout.addWidget(self.internal_tabs)
 
@@ -138,13 +137,14 @@ class ProcessingTab(QWidget):
         
         self.cb_target_signal.blockSignals(True)
         self.cb_target_signal.clear()
-        self.cb_target_signal.addItems(list(self.session.workspace.keys()))
+        self.cb_target_signal.addItems(self.session.logical_keys)
         
         if self.session.active_context:
             self.cb_target_signal.setCurrentText(self.session.active_context)
         self.cb_target_signal.blockSignals(False)
 
         self.on_stage_changed(self.combo_stage.currentText())
+    
 
     def _on_context_switched(self, ctx_name):
         """Fired when switching signals in the persistent header."""
