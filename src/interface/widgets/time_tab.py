@@ -248,6 +248,8 @@ class TimeDomainTab(QWidget):
         """Draws vertical event lines and labels."""
         if not hasattr(self.session, 'obtain_events'): return
         events, event_id = self.session.obtain_events()
+        if len(events) == 0: return
+        
         sfreq = self.session.current_data.info['sfreq']
         id_to_label = {v: k for k, v in event_id.items()}
 
@@ -258,7 +260,7 @@ class TimeDomainTab(QWidget):
             self.ax.axvline(t_ev, color=color, ls='--', lw=1.5, alpha=0.8)
             y_pos = offsets[0] if len(offsets) > 0 else 0
             self.ax.text(t_ev, y_pos, id_to_label.get(ev[2], str(ev[2])), 
-                         color=color, rotation=90, va='bottom', fontweight='bold')
+                        color=color, rotation=90, va='bottom', fontweight='bold')
 
     def _draw_eda_results(self, offsets):
         """Draws red spans and diagnostic tags from EDA results."""

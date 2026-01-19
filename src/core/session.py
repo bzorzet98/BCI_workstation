@@ -379,3 +379,7 @@ class SessionState:
                     self.active_context = old_focus
                     
         return success_overall
+    
+    def get_available_raw_contexts(self) -> List[str]:
+        """Returns a list of keys in the workspace that are MNE Raw objects."""
+        return [k for k, v in self.workspace.items() if isinstance(v, mne.io.BaseRaw)]

@@ -3,13 +3,16 @@ import numpy as np
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QComboBox, QPushButton, QScrollArea, QLineEdit, 
                              QFormLayout, QTextEdit, QFrame, QTabWidget, 
-                             QListWidget, QApplication, QCheckBox,QSpinBox)
+                             QListWidget, QApplication, QCheckBox,QSpinBox,QGroupBox,QListWidgetItem)
 from PyQt6.QtCore import Qt
 from PyQt6 import sip 
+import inspect
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+import mne
 from src.core.registry import Registry
 from src.utils.imports import import_class
+from src.interface.widgets.helpers import CheckableComboBox
 
 class EDATab(QTabWidget):
     """
@@ -50,18 +53,92 @@ class EDATab(QTabWidget):
         # Trigger Initial Build
         self.on_analyzer_changed()
 
+
     def refresh(self):
         """Called by Main Window to sync state."""
         if sip.isdeleted(self): return
+        
+        # 1. Sync Focus Signal list
+        self.combo_focus.blockSignals(True)
+        self.combo_focus.clear()
+        # Add all available signals in workspace
+        self.combo_focus.addItems(list(self.session.workspace.keys()))
+        # Set current selection to session's active context
+        if self.session.active_context:
+            idx = self.combo_focus.findText(self.session.active_context)
+            if idx >= 0: self.combo_focus.setCurrentIndex(idx)
+        self.combo_focus.blockSignals(False)
+
+        # 2. Populate Reference signals
+        self._populate_ref_signals()
+
+        # 3. Sync Analyzer Logic
         self.on_analyzer_changed()
+        
         if self.session.eda_report:
             self.show_results(self.session.eda_report)
+
+        if self.session.current_data:
+            self._populate_ref_signals()
+            self.on_analyzer_changed()
+
+        if self.session.eda_report:
+            self.show_results(self.session.eda_report)
+
+    #     # RIGHT: Parameter Setup
+    #     params_panel = QWidget()
+    #     params_layout = QVBoxLayout(params_panel)
+        
+    #     # Analyzer Selector
+    #     f_select = QFormLayout()
+    #     self.combo_analyzer = QComboBox()
+    #     available = Registry.discover_eda_analyzers()
+    #     for name, path in available.items():
+    #         self.combo_analyzer.addItem(name, userData=path)
+        
+    #     self.combo_analyzer.currentIndexChanged.connect(self.on_analyzer_changed)
+    #     f_select.addRow("<b>Target Analyzer:</b>", self.combo_analyzer)
+    #     params_layout.addLayout(f_select)
+
+    #     self.ref_signal_container = QGroupBox("Reference / Context Signals")
+    #     self.ref_signal_container.setCheckable(False) # The group itself isn't a toggle
+    #     ref_layout = QVBoxLayout(self.ref_signal_container)
+
+    #     self.list_ref_signals = QListWidget()
+    #     self.list_ref_signals.setFixedHeight(120) # Keep it compact
+    #     ref_layout.addWidget(QLabel("Select signals to use as reference:"))
+    #     ref_layout.addWidget(self.list_ref_signals)
+
+    #     params_layout.addWidget(self.ref_signal_container)
+    #     self.ref_signal_container.hide() # Hidden by default
+
+    #     # Dynamic Kwargs Scroll Area
+    #     params_layout.addWidget(QLabel("<b>Parameters:</b>"))
+    #     self.scroll_config = QScrollArea()
+    #     self.scroll_config.setWidgetResizable(True)
+    #     self.scroll_config.setStyleSheet("background-color: #f8f9fa; border: 1px solid #dee2e6;")
+        
+    #     self.form_widget = QWidget()
+    #     self.form_widget.setStyleSheet("background-color: #f8f9fa;")
+    #     self.form_layout = QFormLayout(self.form_widget)
+    #     self.scroll_config.setWidget(self.form_widget)
+    #     params_layout.addWidget(self.scroll_config)
+        
+    #     # Run Button
+    #     self.btn_run = QPushButton("Run Analysis")
+    #     self.btn_run.setFixedHeight(45)
+    #     self.btn_run.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold; border-radius: 4px;")
+    #     self.btn_run.clicked.connect(self.run_analysis)
+    #     params_layout.addWidget(self.btn_run)
+        
+    #     layout.addWidget(params_panel)
 
     def _setup_config_tab(self):
         """Layout: [ History Sidebar | Parameter Setup ]"""
         layout = QHBoxLayout(self.tab_config)
 
-        # LEFT: Internal History Sidebar
+        # LEFT: Internal History Sidebar (Keep this as you have it)
+
         hist_panel = QFrame()
         hist_panel.setFixedWidth(260)
         hist_panel.setStyleSheet(f"border-right: 1px solid {self.c_spine};")
@@ -79,35 +156,48 @@ class EDATab(QTabWidget):
         hist_vbox.addWidget(self.btn_delete_hist)
         
         layout.addWidget(hist_panel)
-
+    
         # RIGHT: Parameter Setup
         params_panel = QWidget()
         params_layout = QVBoxLayout(params_panel)
         
-        # Analyzer Selector
+        # --- TOP FORM SELECTORS ---
         f_select = QFormLayout()
+        
+         # 1. NEW: Focus Signal Row (Matches your other tabs)
+        self.combo_focus = QComboBox()
+        self.combo_focus.currentIndexChanged.connect(self._on_focus_changed)
+        f_select.addRow("<b>Focus Signal:</b>", self.combo_focus)
+
+        # 1. Target Analyzer Row
         self.combo_analyzer = QComboBox()
         available = Registry.discover_eda_analyzers()
         for name, path in available.items():
             self.combo_analyzer.addItem(name, userData=path)
-        
         self.combo_analyzer.currentIndexChanged.connect(self.on_analyzer_changed)
         f_select.addRow("<b>Target Analyzer:</b>", self.combo_analyzer)
+
+        # 2. Compact Reference Selector Row
+        self.lbl_ref_title = QLabel("<b>Reference Signal(s):</b>")
+        self.combo_ref_signals = CheckableComboBox()
+        self.combo_ref_signals.setEditable(True)
+        self.combo_ref_signals.lineEdit().setReadOnly(True)
+        
+        f_select.addRow(self.lbl_ref_title, self.combo_ref_signals)
         params_layout.addLayout(f_select)
 
-        # Dynamic Kwargs Scroll Area
+        # --- PARAMETERS SCROLL AREA ---
         params_layout.addWidget(QLabel("<b>Parameters:</b>"))
         self.scroll_config = QScrollArea()
         self.scroll_config.setWidgetResizable(True)
-        self.scroll_config.setStyleSheet("background-color: #f8f9fa; border: 1px solid #dee2e6;")
+        self.scroll_config.setStyleSheet(f"background-color: {self.c_bg}; border: 1px solid {self.c_spine};")
         
         self.form_widget = QWidget()
-        self.form_widget.setStyleSheet("background-color: #f8f9fa;")
         self.form_layout = QFormLayout(self.form_widget)
         self.scroll_config.setWidget(self.form_widget)
         params_layout.addWidget(self.scroll_config)
         
-        # Run Button
+        # --- RUN BUTTON ---
         self.btn_run = QPushButton("Run Analysis")
         self.btn_run.setFixedHeight(45)
         self.btn_run.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold; border-radius: 4px;")
@@ -115,6 +205,13 @@ class EDATab(QTabWidget):
         params_layout.addWidget(self.btn_run)
         
         layout.addWidget(params_panel)
+
+    def _on_focus_changed(self):
+        """Updates the session focus when the user changes it in this tab."""
+        new_focus = self.combo_focus.currentText()
+        if new_focus:
+            self.session.active_context = new_focus
+            print(f"[EDA Tab] Focus shifted to: {new_focus}")
 
     def _setup_results_tab(self):
         layout = QVBoxLayout(self.tab_results)
@@ -347,39 +444,137 @@ class EDATab(QTabWidget):
         self.update_hist_canvas(); self.update_scatter_canvas(); 
         self.update_mapping_canvas(); self.update_inspect_canvas()
 
+    # def on_analyzer_changed(self):
+    #     if sip.isdeleted(self): return
+    #     while self.form_layout.count():
+    #         item = self.form_layout.takeAt(0)
+    #         if item.widget(): item.widget().deleteLater()
+    #     self.inputs = {}
+    #     name, path = self.combo_analyzer.currentText(), self.combo_analyzer.currentData()
+    #     Cls = import_class(name, path)
+        
+    #     # Inspect the 'analyze' method
+    #     analyze_sig = inspect.signature(Cls.analyze)
+    #     params = analyze_sig.parameters
+        
+    #     # Show container if analyzer accepts 'rest' or 'references'
+    #     if 'rest' in params or 'references' in params:
+    #         self.ref_signal_container.show()
+    #         self._populate_ref_signals()
+    #     else:
+    #         self.ref_signal_container.hide()
+
+    #     params = Registry.get_analyzer_params(name, path)
+    #     for arg, val in params.items():
+    #         if arg in ['self', 'kwargs']: continue
+    #         lbl = QLabel(arg); le = QLineEdit(str(val))
+    #         self.form_layout.addRow(lbl, le); self.inputs[arg] = le
+
     def on_analyzer_changed(self):
-        if sip.isdeleted(self): return
+        if sip.isdeleted(self) or self.combo_analyzer.count() == 0: return
+        if QApplication.focusObject():
+            QApplication.focusObject().clearFocus()
+
         while self.form_layout.count():
             item = self.form_layout.takeAt(0)
-            if item.widget(): item.widget().deleteLater()
+            if item.widget():
+                # Hide first to trigger a focus change safely
+                item.widget().hide()
+                item.widget().deleteLater()
         self.inputs = {}
-        name, path = self.combo_analyzer.currentText(), self.combo_analyzer.currentData()
-        params = Registry.get_analyzer_params(name, path)
-        for arg, val in params.items():
-            if arg in ['self', 'kwargs']: continue
-            lbl = QLabel(arg); le = QLineEdit(str(val))
-            self.form_layout.addRow(lbl, le); self.inputs[arg] = le
+
+        try:
+            name = self.combo_analyzer.currentText()
+            path = self.combo_analyzer.currentData()
+            Cls = import_class(name, path)
+            
+            # 2. Inspect signature for 'rest' or 'references'
+            import inspect
+            sig = inspect.signature(Cls.analyze)
+            has_ref_param = 'rest' in sig.parameters or 'references' in sig.parameters
+            
+            # 3. Toggle Visibility of the Form Row
+            self.lbl_ref_title.setVisible(has_ref_param)
+            self.combo_ref_signals.setVisible(has_ref_param)
+            
+            if has_ref_param:
+                self._populate_ref_signals()
+
+            # 4. Build dynamic parameter fields for __init__
+            params = Registry.get_analyzer_params(name, path)
+            for arg, val in params.items():
+                if arg in ['self', 'kwargs']: continue
+                le = QLineEdit(str(val))
+                self.form_layout.addRow(QLabel(f"<i>{arg}</i>:"), le)
+                self.inputs[arg] = le
+                
+        except Exception as e:
+            print(f"[EDA Tab] Error changing analyzer: {e}")
+
 
     def run_analysis(self):
         if not self.session.current_data: return
+
+        if self.form_widget.focusWidget():
+            self.form_widget.focusWidget().clearFocus()
+
+        QApplication.processEvents()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+
+        # 1. Get the primary data object based on the FOCUS selector
+        focus_key = self.combo_focus.currentText()
+        if focus_key not in self.session.workspace:
+            print("[EDA] Error: Focus signal not found.")
+            return
+            
+        target_data = self.session.workspace[focus_key]
+        
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+
         try:
-            kwargs = {k: ast.literal_eval(v.text()) if v.text().strip() else "" for k, v in self.inputs.items()}
+
+            # 2. Instantiate Analyzer
+            kwargs = {k: ast.literal_eval(v.text()) if v.text().strip() else "" 
+                      for k, v in self.inputs.items()}
             Cls = import_class(self.combo_analyzer.currentText(), self.combo_analyzer.currentData())
+            analyzer = Cls(**kwargs)
+
+            # 3. Determine Reference Data
+            import inspect
+            sig = inspect.signature(Cls.analyze)
+            selected_names = self.combo_ref_signals.get_checked_items()
+            selected_objs = [self.session.workspace[name] for name in selected_names]
+
+            # 4. Map Arguments
+            call_kwargs = {}
+            if 'rest' in sig.parameters:
+                call_kwargs['rest'] = selected_objs[0] if selected_objs else None
+            if 'references' in sig.parameters:
+                call_kwargs['references'] = selected_objs
+
+            # 5. EXECUTE on the Target Data
+            report = analyzer.analyze(target_data, **call_kwargs)
             
-            analyzer = Cls( **kwargs)
-            report = analyzer.analyze(self.session.current_data)
+            # 6. Save and Show Results
             self.session.eda_report = report
-            
-            # Save history
             name = self.combo_analyzer.currentText()
             self.history_data.append({'name': f"{name} #{self.list_history.count()+1}", 'report': report})
             self.list_history.addItem(self.history_data[-1]['name'])
             
-            self.show_results(report); self.setCurrentIndex(1)
+            self.show_results(report)
+            self.setCurrentIndex(1) # Jump to results tab
             if hasattr(self.window(), 'refresh_gui'): self.window().refresh_gui()
-        except Exception as e: self.txt_report.setText(f"Error: {e}"); self.setCurrentIndex(1)
-        finally: QApplication.restoreOverrideCursor()
+
+        except Exception as e:
+            self.txt_report.setText(f"Analysis Error:\n{e}")
+            self.setCurrentIndex(1)
+        finally:
+             # Standard way
+            QApplication.restoreOverrideCursor()
+            
+            # Hard reset if it's still stuck (clears the whole stack)
+            while QApplication.overrideCursor() is not None:
+                QApplication.restoreOverrideCursor()
 
     def _load_from_history(self, item):
         idx = self.list_history.row(item)
@@ -422,3 +617,51 @@ class EDATab(QTabWidget):
             data = (data - median) / (mad * 1.4826 + 1e-9)
             
         return data
+    
+    # def _populate_ref_signals(self):
+    #     """Fills the list widget with checkable signals from the workspace."""
+    #     if sip.isdeleted(self): return
+    #     if not self.session or not self.session.workspace:
+    #         self.list_ref_signals.clear()
+    #         return
+
+    #     # 1. BLOCK SIGNALS: This prevents the 'clear' and 'addItem' from 
+    #     # triggering any unintended UI updates while we are building the list.
+    #     self.list_ref_signals.blockSignals(True)
+        
+    #     try:
+    #         self.list_ref_signals.clear()
+            
+    #         # 2. Get keys safely
+    #         raw_keys = [k for k, v in self.session.workspace.items() 
+    #                     if isinstance(v, mne.io.BaseRaw)]
+            
+    #         for key in raw_keys:
+    #             # 3. Create item safely
+    #             item = QListWidgetItem(key)
+    #             # Set the checkbox flag
+    #             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+    #             item.setCheckState(Qt.CheckState.Unchecked)
+    #             self.list_ref_signals.addItem(item)
+                
+    #     except Exception as e:
+    #         print(f"[EDA Tab] Error populating reference signals: {e}")
+    #     finally:
+    #         # 4. ALWAYS UNBLOCK SIGNALS
+    #         self.list_ref_signals.blockSignals(False)
+
+    def _populate_ref_signals(self):
+
+        """Fills the compact combo with checkable signals from the workspace."""
+        self.combo_ref_signals.blockSignals(True)
+        self.combo_ref_signals.clear()
+        
+        # Get raw signals from session
+        raw_keys = [k for k, v in self.session.workspace.items() 
+                    if isinstance(v, mne.io.BaseRaw)]
+        
+        for key in raw_keys:
+            self.combo_ref_signals.addItem(key)
+            
+        self.combo_ref_signals.setEditText("Select references...")
+        self.combo_ref_signals.blockSignals(False)
