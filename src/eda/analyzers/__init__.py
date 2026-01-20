@@ -6,3 +6,4 @@ from .EMGEnvelopeAnalyzer import EMGEnvelopeAnalyzer
 from .HjorthAnalyzer import HjorthAnalyzer  
 from .KurtosisAnalyzer import KurtosisAnalyzer
 from .PeakAmplitudeAnalyzer import PeakAmplitudeAnalyzer
+from .SignalFeatureAnalyzer import SignalFeatureAnalyzer

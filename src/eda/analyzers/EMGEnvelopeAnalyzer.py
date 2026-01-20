@@ -258,27 +258,42 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
         return bad_indices, tags
     
     def _build_report(self, metrics, raw_seg, env_seg, thresholds, events, bad_idx, tags):
-        """Constructs the high-fidelity dictionary for BCIWorkstation."""
         return {
+            # --- CORE: GUI ALWAYS EXPECTS THESE ---
             "summary": (f"Analyzer: EMG Envelope\n"
                         f"Flagged Trials: {len(bad_idx)} / {len(tags)}\n"
                         f"Threshold: {self.params['mult']}x SD Rest"),
+            "visuals": ["hist", "scatter", "mapping", "inspect"],
             "artifacts": {
                 "bad_indices": bad_idx,
                 "bad_tags": [tags[i] for i in bad_idx],
-                "event_types": events[:, 2].tolist(),
+                "event_types": events[:, 2].tolist(), # Needed for coloring plots
                 "tmin": self.params['tmin'],
                 "tmax": self.params['tmax']
             },
-            "metrics": {
-                "Contamination Rate": {"values": {ch: metrics["Contamination Rate"][:, j].tolist() for j, ch in enumerate(self.picks)}, "unit": "%"},
-                "Local SNR": {"values": {ch: metrics["Local SNR"][:, j].tolist() for j, ch in enumerate(self.picks)}, "unit": "ratio"},
-                "Sustained Duration": {"values": {ch: metrics["Sustained Duration"][:, j].tolist() for j, ch in enumerate(self.picks)}, "unit": "s"},
-                "Envelope Integral": {"values": {ch: metrics["Envelope Integral"][:, j].tolist() for j, ch in enumerate(self.picks)}, "unit": "area"}
-            },
-            "threshold_lines": {ch: thresholds[j] for j, ch in enumerate(self.picks)},
+            
+                "metrics": {
+                    "Contamination Rate": {
+                        "values": {ch: metrics["Contamination Rate"][:, j].tolist() for j, ch in enumerate(self.picks)}, 
+                        "unit": "%"
+                        },
+                    "Local SNR": {
+                        "values": {ch: metrics["Local SNR"][:, j].tolist() for j, ch in enumerate(self.picks)}, 
+                        "unit": "ratio"
+                        },
+                    "Sustained Duration": {
+                        "values": {ch: metrics["Sustained Duration"][:, j].tolist() for j, ch in enumerate(self.picks)}, 
+                        "unit": "s"
+                        },
+                    "Envelope Integral": {
+                        "values": {ch: metrics["Envelope Integral"][:, j].tolist() for j, ch in enumerate(self.picks)}
+                        , "unit": "area"}
+                },
+            # --- EXTENSIONS: OPTIONAL DATA ---
             "inspection_data": {
                 "raw_traces": {ch: raw_seg[:, j, :].tolist() for j, ch in enumerate(self.picks)},
-                "envelope_traces": {ch: env_seg[:, j, :].tolist() for j, ch in enumerate(self.picks)}
+                "envelope_traces": {ch: env_seg[:, j, :].tolist() for j, ch in enumerate(self.picks)},
+                "threshold_lines": {ch: thresholds[j] for j, ch in enumerate(self.picks)}
             }
         }
+        
