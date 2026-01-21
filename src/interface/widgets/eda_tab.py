@@ -266,6 +266,7 @@ class EDATab(QTabWidget):
         ref_names = self.combo_ref_signals.get_checked_items()
         ref_objs = [self.session.workspace[n] for n in ref_names]
 
+        inspection_data = {}
         for context_key in focus_keys:
             data = self.session.workspace[context_key]
             
@@ -316,22 +317,24 @@ class EDATab(QTabWidget):
                     
                     records.append(row)
             
+            inspection_data[context_key] = report.get('inspection_data', {})
             all_frames.append(pd.DataFrame(records))
 
         # 3. Merge and Package
         master_df = pd.concat(all_frames, ignore_index=True)
-        print(f"[EDA] Master DF created. Total rows: {len(master_df)}. Channels: {master_df['Channel'].unique()}")
+        print(f"[EDA] Master DF created. Total rows: {len(master_df)}. Channels: {master_df['channel'].unique()}")
 
         return {
             "summary": "\n---\n".join(summaries),
             "df": master_df,
-            "visuals": report.get("visuals", ["hist", "scatter", "mapping", "inspect"]),
+            "visuals": report.get("visuals", []),
             "artifacts": {
                 "tmin": report['artifacts'].get('tmin', 0),
                 "tmax": report['artifacts'].get('tmax', 1)
             },
-            "inspection_data": {context_key: report.get('inspection_data', {}) for context_key in focus_keys}
+            "inspection_data": inspection_data
         }
+        
     # --- VISUALIZATION & PLOTTING ---
     def _build_results_ui(self):
         """Creates the internal tabs for visualization."""
@@ -367,34 +370,55 @@ class EDATab(QTabWidget):
 
         # Metric Selectors (Conditional)
         if mode in ["hist", "mapping"]:
+            w.cb_inspect_ctx = QComboBox()
+            h_ctrl.addWidget(QLabel("Context:"))
+            h_ctrl.addWidget(w.cb_inspect_ctx)
+            w.cb_inspect_ctx.currentIndexChanged.connect(callback)
+            
             w.cb_metric = QComboBox()
             h_ctrl.addWidget(QLabel("Metric:"))
             h_ctrl.addWidget(w.cb_metric)
             w.cb_metric.currentIndexChanged.connect(callback)
+            
             w.chk_segregate = QCheckBox("Segregate Cues")
             w.chk_segregate.setToolTip("Show individual trial types (Left, Right, etc.)")
             w.chk_segregate.stateChanged.connect(callback)
+            
             h_ctrl.addWidget(w.chk_segregate)
             
         if mode == "scatter":
+            w.cb_inspect_ctx = QComboBox()
+            h_ctrl.addWidget(QLabel("Context:"))
+            h_ctrl.addWidget(w.cb_inspect_ctx)
+            w.cb_inspect_ctx.currentIndexChanged.connect(callback)
+            
             w.cb_metric_x = QComboBox()
             w.cb_metric_y = QComboBox()
             h_ctrl.addWidget(QLabel("X:"))
             h_ctrl.addWidget(w.cb_metric_x)
             h_ctrl.addWidget(QLabel("Y:"))
             h_ctrl.addWidget(w.cb_metric_y)
+            
             w.cb_metric_x.currentIndexChanged.connect(callback)
             w.cb_metric_y.currentIndexChanged.connect(callback)
+            
+            w.chk_segregate = QCheckBox("Segregate Cues")
+            w.chk_segregate.setToolTip("Show individual trial types (Left, Right, etc.)")
+            w.chk_segregate.stateChanged.connect(callback)
+            
+            h_ctrl.addWidget(w.chk_segregate)
 
         if mode == "inspect":
             w.cb_inspect_ctx = QComboBox()
             h_ctrl.addWidget(QLabel("Context:"))
             h_ctrl.addWidget(w.cb_inspect_ctx)
             w.cb_inspect_ctx.currentIndexChanged.connect(callback)
+            
             w.sb_trial = QSpinBox()
             w.sb_trial.setPrefix("Trial #: ")
             w.sb_trial.setRange(0, 99999)
             w.sb_trial.valueChanged.connect(callback)
+            
             h_ctrl.addWidget(w.sb_trial)
             
         if mode != "inspect":
@@ -441,62 +465,45 @@ class EDATab(QTabWidget):
         while QApplication.overrideCursor() is not None: QApplication.restoreOverrideCursor()
 
     def show_results(self, report):
-        """
-        Updates selectors and dynamically shows/hides tabs based on 
-        the Master DataFrame contents.
-        """
-        if not report or 'df' not in report:
-            print("[EDA] Error: Report missing Master DataFrame.")
-            return
-
+        if not report or 'df' not in report: return
         self.last_report = report
         self.txt_report.setText(report.get('summary', ""))
         
-        # 1. DYNAMIC TAB VISIBILITY
-        supported_plots = report.get("visuals", ["hist", "scatter", "mapping", "inspect"])
+        # 1. VISIBILITY LOGIC
+        supported = report.get("visuals", ["hist", "scatter", "mapping", "inspect"])
+        tabs_to_update = []
         
-        # We assume the tab order: [0:Summary, 1:Hist, 2:Scatter, 3:Mapping, 4:Inspect]
-        self.res_subtabs.setTabVisible(1, "hist" in supported_plots)
-        self.res_subtabs.setTabVisible(2, "scatter" in supported_plots)
-        self.res_subtabs.setTabVisible(3, "mapping" in supported_plots)
-        self.res_subtabs.setTabVisible(4, "inspect" in supported_plots)
+        mapping = {"hist": (1, self.tab_hist), "scatter": (2, self.tab_scatter), 
+                   "mapping": (3, self.tab_mapping), "inspect": (4, self.tab_inspect)}
 
-        # 2. EXTRACT NAMES FROM DATAFRAME
+        for tag, (idx, tab_obj) in mapping.items():
+            is_visible = tag in supported
+            self.res_subtabs.setTabVisible(idx, is_visible)
+            if is_visible: tabs_to_update.append(tab_obj)
+
+        # 2. NAMES EXTRACTION
         df = report['df']
-
-        # Channels are simply the unique values in the 'channel' column
         chans = sorted(df['channel'].unique().tolist())
-        
-        # Metrics are the columns that are NOT metadata or units
-        metadata_cols = ['context', 'cue', 'channel', 'trial_idx', 'is_flagged']
-        metrics = [col for col in df.columns if col not in metadata_cols and not col.endswith('_unit')]
+        meta = ['context', 'cue', 'channel', 'trial_idx', 'is_flagged']
+        metrics = [c for c in df.columns if c not in meta and not c.endswith('_unit')]
 
-        # 3. POPULATE SELECTORS
-        # We update every tab to ensure they are in sync
-        for tab in [self.tab_hist, self.tab_scatter, self.tab_mapping, self.tab_inspect]:
-            # Use our robust helper to fill the combo boxes
+        # 3. TARGETED UPDATE
+        for tab in tabs_to_update:
             self._update_tab_selectors(tab, metrics, chans)
 
         # 4. INITIAL FOCUS
-        # Move the user to the most relevant tab and trigger the first draw
-        if "hist" in supported_plots:
+        if "hist" in supported:
             self.res_subtabs.setCurrentIndex(1)
-            # Small delay to allow the GUI to process visibility changes before drawing
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(50, self.update_hist_canvas)
-        else:
-            self.res_subtabs.setCurrentIndex(0)
-            
-        print(f"[EDA] UI Updated: {len(metrics)} metrics and {len(chans)} channels ready.")
 
     def _update_tab_selectors(self, tab, metrics, chans):
         """
         Populates the combo boxes inside a specific plot sub-tab.
         """
-        # Define which attributes to look for in the tab object
-        # (These were created in _create_plot_subtab)
+        # 1. Populate Metrics and Channels (Existing logic)
         combos_to_fill = [
-            (getattr(tab, 'cb_ch', None), chans, True),       # (object, data, add_overlay_option)
+            (getattr(tab, 'cb_ch', None), chans, True),
             (getattr(tab, 'cb_metric', None), metrics, False),
             (getattr(tab, 'cb_metric_x', None), metrics, False),
             (getattr(tab, 'cb_metric_y', None), metrics, False)
@@ -506,45 +513,50 @@ class EDATab(QTabWidget):
             if cb is not None:
                 cb.blockSignals(True)
                 cb.clear()
-                
-                if add_overlay:
-                    cb.addItem("All Channels (Overlay)")
-                
+                if add_overlay: cb.addItem("All Channels (Overlay)")
                 cb.addItems(items)
-                
-                # Set a sensible default (first item)
-                if cb.count() > 0:
-                    cb.setCurrentIndex(0)
-                    
+                if cb.count() > 0: cb.setCurrentIndex(0)
                 cb.blockSignals(False)
 
+        # 2. POPULATE CONTEXT SELECTOR (The new logic)
         if hasattr(tab, 'cb_inspect_ctx'):
-            tab.cb_inspect_ctx.blockSignals(True)
-            tab.cb_inspect_ctx.clear()
+            cb_ctx = tab.cb_inspect_ctx
+            cb_ctx.blockSignals(True)
+            cb_ctx.clear()
             
-            # Find which contexts have inspection data in the report
-            insp_data = self.last_report.get('inspection_data', {})
-            available_contexts = list(insp_data.keys())
+            # Get available contexts from the Master DataFrame
+            df = self.last_report['df']
+            available_contexts = sorted(df['context'].unique().tolist())
             
-            tab.cb_inspect_ctx.addItems(available_contexts)
-            tab.cb_inspect_ctx.blockSignals(False)
+            # --- LOGIC: 'All Contexts' vs Single Context ---
+            # If the current tab is NOT the inspection tab, add the "All" option
+            if tab != self.tab_inspect:
+                cb_ctx.addItem("All Contexts (Comparison)")
+            
+            cb_ctx.addItems(available_contexts)
+            
+            if cb_ctx.count() > 0: cb_ctx.setCurrentIndex(0)
+            cb_ctx.blockSignals(False)
 
-        # Update SpinBox range based on the SELECTED context in inspection
-        self._update_inspection_range()
+        # 3. Update SpinBox range (only if on inspection tab)
+        if tab == self.tab_inspect:
+            self._update_inspection_range()
         
     def _update_inspection_range(self):
-        """Adjusts the SpinBox maximum based on the selected context's trial count."""
-        w = self.tab_inspect
-        if not hasattr(w, 'cb_inspect_ctx') or not self.last_report: return
+        """Adjusts the SpinBox range specifically for the Inspection tab."""
+        if not self.last_report or not hasattr(self.tab_inspect, 'cb_inspect_ctx'): 
+            return
         
-        ctx_name = w.cb_inspect_ctx.currentText()
+        tab = self.tab_inspect
+        ctx_name = tab.cb_inspect_ctx.currentText()
+        
+        # Inspection doesn't have an "All" option, but safety first
         insp_map = self.last_report.get('inspection_data', {})
-        
         if ctx_name in insp_map:
-            # Use the length of the first available raw trace as trial count
-            first_ch = list(insp_map[ctx_name]['raw_traces'].keys())[0]
+            # Get the trial count from the traces
+            first_ch = list(insp_map[ctx_name].get('raw_traces', {}).keys())[0]
             n_trials = len(insp_map[ctx_name]['raw_traces'][first_ch])
-            w.sb_trial.setRange(0, max(0, n_trials - 1))
+            tab.sb_trial.setRange(0, max(0, n_trials - 1))
             
     def _add_to_history(self, report):
         name = self.combo_analyzer.currentText()
@@ -565,43 +577,92 @@ class EDATab(QTabWidget):
 
     def update_hist_canvas(self):
         if not self.last_report or 'df' not in self.last_report: return
-        w = self.tab_hist; w.fig.clear(); ax = w.fig.add_subplot(111); self._style_ax(ax)
+        w = self.tab_hist
         
+        # 1. GET FILTERED DATA
+        df = self._get_tab_filtered_df(w)
+        
+        w.fig.clear(); ax = w.fig.add_subplot(111); self._style_ax(ax)
+        
+        if df is None or df.empty:
+            ax.text(0.5, 0.5, "No data for selection", ha='center', color='gray')
+            w.canvas.draw(); return
+
         metric, ch = w.cb_metric.currentText(), w.cb_ch.currentText()
         if not metric or not ch: return
 
-        # FILTER THE MASTER DATAFRAME
-        df = self.last_report['df']
+        # 2. CHANNEL FILTER
         if ch != "All Channels (Overlay)":
             df = df[df['channel'] == ch]
 
-        # Apply GUI Math (Log/Z)
-        data_to_plot = self._apply_transforms(df[metric].values, w)
-        df = df.copy(); df[metric] = data_to_plot # Update copy for seaborn
+        # 3. MATH TRANSFORMS
+        df = df.copy()
+        df[metric] = self._apply_transforms(df[metric].values, w)
 
-        hue_col = 'cue' if (hasattr(w, 'chk_segregate') and w.chk_segregate.isChecked()) else 'context'
+        # 4. FIXED HUE LOGIC
+        # If the user selected a specific context, we don't need 'context' as a hue
+        # unless they want to segregate by cues.
+        is_segregated = hasattr(w, 'chk_segregate') and w.chk_segregate.isChecked()
+        is_comparison = "All Contexts" in w.cb_inspect_ctx.currentText()
 
-        sns.histplot(data=df, x=metric, hue=hue_col, palette=self.event_colors, 
-                     ax=ax, kde=True, element="step", common_norm=False)
+        if is_segregated:
+            hue_col = 'cue'
+        elif is_comparison:
+            hue_col = 'context'
+        else:
+            hue_col = None # IMPORTANT: Disable hue for single context selection
+
+        # 5. PLOT
+        sns.histplot(
+            data=df, x=metric, hue=hue_col, 
+            palette=self.event_colors, ax=ax,
+            kde=True, element="step", alpha=0.3, common_norm=False
+        )
         
-        ax.set_title(f"{metric} Distribution ({ch})")
+        ax.set_title(f"Distribution: {metric} ({ch})")
         w.canvas.draw()
         
     def update_scatter_canvas(self):
+        
         if not self.last_report or 'df' not in self.last_report: return
-        w = self.tab_scatter; w.fig.clear(); ax = w.fig.add_subplot(111); self._style_ax(ax)
+        w = self.tab_scatter
+        
+        # 1. GET FILTERED DATA
+        df = self._get_tab_filtered_df(w)
+        
+        w.fig.clear(); ax = w.fig.add_subplot(111); self._style_ax(ax)
+        
+        if df is None or df.empty:
+            ax.text(0.5, 0.5, "No data for selection", ha='center', color='gray')
+            w.canvas.draw(); return
+
         mx, my, ch = w.cb_metric_x.currentText(), w.cb_metric_y.currentText(), w.cb_ch.currentText()
         if not mx or not my or not ch: return
 
-        df = self.last_report['df']
-        if ch != "All Channels (Overlay)": df = df[df['channel'] == ch]
+        # 2. CHANNEL FILTER
+        if ch != "All Channels (Overlay)":
+            df = df[df['channel'] == ch]
 
-        # Apply Math
+        # 3. MATH TRANSFORMS
+        df = df.copy()
         df = df.copy()
         df[mx] = self._apply_transforms(df[mx].values, w)
         df[my] = self._apply_transforms(df[my].values, w)
 
-        sns.scatterplot(data=df, x=mx, y=my, hue='context', palette=self.event_colors, ax=ax, alpha=0.5)
+        # 4. FIXED HUE LOGIC
+        # If the user selected a specific context, we don't need 'context' as a hue
+        # unless they want to segregate by cues.
+        is_segregated = hasattr(w, 'chk_segregate') and w.chk_segregate.isChecked()
+        is_comparison = "All Contexts" in w.cb_inspect_ctx.currentText()
+
+        if is_segregated:
+            hue_col = 'cue'
+        elif is_comparison:
+            hue_col = 'context'
+        else:
+            hue_col = None # IMPORTANT: Disable hue for single context selection
+            
+        sns.scatterplot(data=df, x=mx, y=my, hue=hue_col, palette=self.event_colors, ax=ax, alpha=0.5)
         
         # Flagging using the Is_Flagged column we created in _execute
         flagged = df[df['is_flagged'] == True]
@@ -611,47 +672,72 @@ class EDATab(QTabWidget):
         w.canvas.draw()
 
     def update_mapping_canvas(self):
-        """
-        Plots Trial Sequence vs Metric. 
-        Uses the trial_idx to show a continuous timeline.
-        """
         if not self.last_report or 'df' not in self.last_report: return
-        
         w = self.tab_mapping
+        
+        # 1. GET FILTERED DATA
+        df = self._get_tab_filtered_df(w)
+        
         w.fig.clear(); ax = w.fig.add_subplot(111); self._style_ax(ax)
         
+        if df is None or df.empty:
+            ax.text(0.5, 0.5, "No data for selection", ha='center', color='gray')
+            w.canvas.draw(); return
+
         metric, ch = w.cb_metric.currentText(), w.cb_ch.currentText()
         if not metric or not ch: return
 
-        # 1. Filter Data
-        df = self.last_report['df']
+        # 2. CHANNEL FILTER
         if ch != "All Channels (Overlay)":
             df = df[df['channel'] == ch]
 
-        if df.empty: return
-
-        # 2. Apply Math
+        # 3. MATH TRANSFORMS
         df = df.copy()
         df[metric] = self._apply_transforms(df[metric].values, w)
 
-        # 3. Plot with Seaborn
-        sns.scatterplot(
-            data=df, x='trial_idx', y=metric, hue='context',
-            palette=self.event_colors, ax=ax, s=40, alpha=0.6, edgecolor=None
-        )
+        # 4. FIXED HUE LOGIC
+        # If the user selected a specific context, we don't need 'context' as a hue
+        # unless they want to segregate by cues.
+        is_segregated = hasattr(w, 'chk_segregate') and w.chk_segregate.isChecked()
+        is_comparison = "All Contexts" in w.cb_inspect_ctx.currentText()
 
-        # 4. Highlight Rejections (Red X)
-        flagged = df[df['is_flagged'] == True]
-        if not flagged.empty:
-            ax.scatter(flagged['trial_idx'], flagged[metric], 
-                       color='red', marker='x', s=80, label="Flagged", zorder=5)
+        if is_segregated:
+            hue_col = 'cue'
+        elif is_comparison:
+            hue_col = 'context'
+        else:
+            hue_col = None # IMPORTANT: Disable hue for single context selection
 
+        sns.scatterplot(data=df, x='trial_idx', y=metric, hue=hue_col, 
+                        palette=self.event_colors, ax=ax, s=40, alpha=0.6)
+        
+        # 6. --- ADDED: SMART ARTIFACT OVERLAY ---
+        # Filter for flagged trials within the current data slice
+        flagged_df = df[df['is_flagged'] == True]
+        
+        if not flagged_df.empty:
+            ax.scatter(
+                flagged_df['trial_idx'], 
+                flagged_df[metric], 
+                color='red', 
+                marker='x', 
+                s=100, 
+                linewidths=2,   
+                label='Artifact (Flagged)',
+                zorder=5 # Ensure crosses are on top of dots
+            )
+
+        # 7. AESTHETICS
+        unit = self.last_report['df'].get(f"{metric}_unit", ["a.u."])[0]
         ax.set_title(f"Sequence Mapping: {metric} ({ch})")
         ax.set_xlabel("Trial Index")
-        ax.set_ylabel(f"Value [{self.last_report['df'].get(f'{metric}_unit', ['a.u.'])[0]}]")
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=False)
+        ax.set_ylabel(f"Value [{unit}]")
+        
+        # Adjust legend to include the 'Flagged' marker
+        ax.legend(frameon=False, loc='upper right', fontsize=8)
         
         w.canvas.draw()
+        
         
     def update_inspect_canvas(self):
         """Microscope view: Filters by Context and Trial ID."""
@@ -703,3 +789,21 @@ class EDATab(QTabWidget):
             
         except Exception as e:
             print(f"[EDA] Inspection Error: {e}")
+            
+    def _get_tab_filtered_df(self, tab):
+        """Returns the Master DF filtered by the specific tab's context selector."""
+        if not self.last_report or 'df' not in self.last_report: return None
+        
+        df = self.last_report['df']
+        
+        if not hasattr(tab, 'cb_inspect_ctx'):
+            return df
+        
+        # Get local selection
+        selection = tab.cb_inspect_ctx.currentText()
+        
+        if selection == "All Contexts (Comparison)":
+            return df # Return everything
+        else:
+            return df[df['context'] == selection] # Return only one context
+    
