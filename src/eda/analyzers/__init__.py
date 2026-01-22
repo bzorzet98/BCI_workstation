@@ -1,4 +1,3 @@
 from .base_analyzer import BaseAnalyzer
-from .EMGBurstAnalyzer import EMGBurstAnalyzer
 from .EMGEnvelopeAnalyzer import EMGEnvelopeAnalyzer
 from .SignalFeatureAnalyzer import SignalFeatureAnalyzer

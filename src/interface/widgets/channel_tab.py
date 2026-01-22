@@ -64,7 +64,7 @@ class ChannelTab(QWidget):
 
     def refresh(self):
         """Rebuilds the anatomical grid based on current session data."""
-        self._clear_ui()
+        # self._clear_ui()
         if not self.session.current_data: return
 
         ch_names = self.session.current_data.ch_names

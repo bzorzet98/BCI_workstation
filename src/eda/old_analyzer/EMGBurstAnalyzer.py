@@ -1,6 +1,6 @@
 import numpy as np
 import mne
-from .base_analyzer import BaseAnalyzer
+from ..analyzers.base_analyzer import BaseAnalyzer
 
 class EMGBurstAnalyzer(BaseAnalyzer):
     def __init__(self, picks=["EMG1", "EMG2", "EMG3", "EMG4"], 

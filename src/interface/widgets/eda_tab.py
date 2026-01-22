@@ -178,32 +178,122 @@ class EDATab(QTabWidget):
             for item in data: combo.addItem(item)
             combo.blockSignals(False)
 
-        # 2. Sync Analyzer Logic and Existing Reports
-        self.on_analyzer_changed()
+        # 2. SMART PARAMETER PRESERVATION
+        # If we already have parameters loaded (inputs dict not empty), 
+        # do NOT call on_analyzer_changed. Only do it if it's the first time.
+        if not self.inputs:
+            self.on_analyzer_changed()
+        else:
+            # We only refresh the reference visibility logic 
+            # without clearing the user's typed text
+            self._update_reference_visibility_only()
+        
         if self.session.eda_report:
             self.show_results(self.session.eda_report)
 
-    def on_analyzer_changed(self):
-        """Inspects the selected analyzer class and rebuilds the parameter form."""
-        if sip.isdeleted(self) or self.combo_analyzer.count() == 0: return
-        
-        self._clear_parameter_form()
-
+    def _update_reference_visibility_only(self):
+        """Helper to toggle Reference row without wiping the parameter form."""
         try:
             name, path = self.combo_analyzer.currentText(), self.combo_analyzer.currentData()
             Cls = import_class(name, path)
-            
-            # Toggle Reference Row based on .analyze() signature
             sig = inspect.signature(Cls.analyze)
             has_ref = any(p in sig.parameters for p in ['rest', 'references'])
             self.lbl_ref_title.setVisible(has_ref)
             self.combo_ref_signals.setVisible(has_ref)
+            if has_ref: self._populate_ref_signals()
+        except: pass
 
-            # Build Kwargs for __init__
-            self._build_dynamic_args(name, path)
+    def _populate_ref_signals(self):
+        """
+        Fills the compact combo with checkable signals from the workspace.
+        This allows selecting multiple signals to act as baselines (e.g., Rest).
+        """
+        if sip.isdeleted(self): return
+        
+        # 1. Block signals to prevent unintended UI refreshes during population
+        self.combo_ref_signals.blockSignals(True)
+        self.combo_ref_signals.clear()
+        
+        # 2. Extract only Raw signals from the workspace
+        # (Usually, baselines are raw signals, not epochs)
+        raw_keys = [k for k, v in self.session.workspace.items() 
+                    if isinstance(v, mne.io.BaseRaw)]
+        
+        # 3. Add each signal to the checkable combo
+        for key in raw_keys:
+            self.combo_ref_signals.addItem(key)
+            
+        # 4. Update the display text
+        self.combo_ref_signals.setEditText("Select references (optional)...")
+        self.combo_ref_signals.blockSignals(False)
+        
+    def on_analyzer_changed(self):
+        """
+        Triggered when the user changes the Target Analyzer.
+        Wipes the previous parameter form and builds a new one dynamically.
+        """
+        # Safety check: ensure widget and data exist
+        if sip.isdeleted(self) or self.combo_analyzer.count() == 0: 
+            return
+        
+        # 1. SAFE LAYOUT CLEARING
+        # Clear focus first to prevent 'nullptr' focus change crashes in Qt
+        if QApplication.focusObject(): 
+            QApplication.focusObject().clearFocus()
+            
+        while self.form_layout.count():
+            item = self.form_layout.takeAt(0)
+            if item.widget():
+                item.widget().hide()
+                item.widget().deleteLater()
+        
+        # Reset the dictionary that stores references to the QLineEdits
+        self.inputs = {}
+
+        # 2. ANALYZER INSPECTION (References visibility)
+        try:
+            name = self.combo_analyzer.currentText()
+            path = self.combo_analyzer.currentData()
+            
+            # Import the class to check its methods
+            Cls = import_class(name, path)
+            
+            # Use introspection to see if .analyze() accepts 'rest' or 'references'
+            sig = inspect.signature(Cls.analyze)
+            has_ref_param = any(p in sig.parameters for p in ['rest', 'references'])
+            
+            # Toggle visibility of the Reference row in the selectors form
+            self.lbl_ref_title.setVisible(has_ref_param)
+            self.combo_ref_signals.setVisible(has_ref_param)
+            
+            if has_ref_param:
+                self._populate_ref_signals()
+
+            # 3. DYNAMIC PARAMETER BUILDING (__init__ arguments)
+            # Get default arguments and values from the Registry
+            params = Registry.get_analyzer_params(name, path)
+            
+            for arg, val in params.items():
+                # Skip internal Python/Class arguments
+                if arg in ['self', 'kwargs', 'args']: 
+                    continue
+                
+                # Create the Label (italicized for aesthetic)
+                lbl = QLabel(f"<i>{arg}</i>:")
+                lbl.setStyleSheet(f"color: {self.c_text};")
+                
+                # Create the Input Box (initialized with default value)
+                le = QLineEdit(str(val))
+                le.setMinimumHeight(25)
+                
+                # Add to the form layout
+                self.form_layout.addRow(lbl, le)
+                
+                # Store reference in self.inputs so run_analysis can read it
+                self.inputs[arg] = le
                 
         except Exception as e:
-            print(f"[EDA] Introspection Error: {e}")
+            print(f"[EDA Tab] Error rebuilding analyzer form: {e}")
 
     def _clear_parameter_form(self):
         """Wipes the dynamic form layout safely."""
@@ -237,17 +327,24 @@ class EDATab(QTabWidget):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
         try:
+            # 1. Capture current parameters from the GUI
+            # We save them as strings exactly as they are in the QLineEdits
+            current_params = {k: v.text() for k, v in self.inputs.items()}
+            analyzer_idx = self.combo_analyzer.currentIndex()
+            
+            # 2. Instantiate and run (Standard logic)
+            kwargs = {k: ast.literal_eval(v) if v.strip() else "" for k, v in current_params.items()}
+
             # 1. Instantiate Analyzer once
             Cls = import_class(self.combo_analyzer.currentText(), self.combo_analyzer.currentData())
-            kwargs = {k: ast.literal_eval(v.text()) if v.text().strip() else "" for k, v in self.inputs.items()}
             analyzer = Cls(**kwargs)
 
             # 2. Execute and Merge
             report = self._execute_multi_context(analyzer, selected_focus)
-            
+
             # 3. Finalize
             self.session.eda_report = report
-            self._add_to_history(report)
+            self._add_to_history(report, current_params, analyzer_idx)
             self.show_results(report)
             self.setCurrentIndex(1) # Jump to results
 
@@ -558,14 +655,36 @@ class EDATab(QTabWidget):
             n_trials = len(insp_map[ctx_name]['raw_traces'][first_ch])
             tab.sb_trial.setRange(0, max(0, n_trials - 1))
             
-    def _add_to_history(self, report):
+    def _add_to_history(self, report, current_params, analyzer_idx):
         name = self.combo_analyzer.currentText()
-        self.history_data.append({'name': f"{name} #{len(self.history_data)+1}", 'report': report})
-        self.list_history.addItem(self.history_data[-1]['name'])
+        history_entry = {
+            'name': f"{name} #{len(self.history_data)+1}",
+            'report': report,
+            'params': current_params,       
+            'analyzer_idx': analyzer_idx    
+        }
+        self.history_data.append(history_entry)
+        self.list_history.addItem(history_entry['name'])
 
     def _load_from_history(self, item):
         idx = self.list_history.row(item)
-        self.last_report = self.history_data[idx]['report']
+        hist = self.history_data[idx]
+
+        # 1. Restore Analyzer Selection
+        self.combo_analyzer.blockSignals(True)
+        self.combo_analyzer.setCurrentIndex(hist['analyzer_idx'])
+        self.combo_analyzer.blockSignals(False)
+
+        # 2. Rebuild the form (This clears old widgets)
+        self.on_analyzer_changed()
+
+        # 3. Inject saved parameters into the NEWLY created QLineEdits
+        for key, value in hist['params'].items():
+            if key in self.inputs:
+                self.inputs[key].setText(str(value))
+
+        # 4. Load report data to plots
+        self.last_report = hist['report']
         self.show_results(self.last_report)
         self.setCurrentIndex(1)
 
@@ -616,7 +735,8 @@ class EDATab(QTabWidget):
         sns.histplot(
             data=df, x=metric, hue=hue_col, 
             palette=self.event_colors, ax=ax,
-            kde=True, element="step", alpha=0.3, common_norm=False
+            kde=True, element="step", alpha=0.3, common_norm=False,
+            stat='probability'
         )
         
         ax.set_title(f"Distribution: {metric} ({ch})")
