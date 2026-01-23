@@ -5,7 +5,7 @@
 
 conda create --name bci_workstation python=3.11.9
 conda activate bci_workstation
-conda install -c conda-forge scipy=1.14
+conda install -c conda-forge scipy=1.17
 conda install --channel conda-forge --strict-channel-priority mne
 pip install pandas
 pip install PyQt6

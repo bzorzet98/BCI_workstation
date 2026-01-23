@@ -1,7 +1,8 @@
 import numpy as np
 import mne
 from typing import Union, Optional, Tuple
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, filtfilt, envelope
+
 from .base_analyzer import BaseAnalyzer
 
 class EMGEnvelopeAnalyzer(BaseAnalyzer):
@@ -71,33 +72,32 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
                             tmax=self.params['tmax'], baseline=None, 
                             preload=True, verbose=False)
         
-        raw_segments = epochs.get_data() # (n_epochs, n_channels, n_samples)
+        signals = epochs.get_data() # (n_epochs, n_channels, n_samples)
         sfreq = raw.info['sfreq']
 
         # 2. Envelope and Threshold Estimation
-        envelope = self._extract_envelope(raw_segments, sfreq)
-
+        # envelope = self._extract_envelope(raw_segments, sfreq)
+        signal_envelopes = envelope(signals, residual=None)
 
         # 3. Flexible Baseline & Adaptive Thresholds
         # If rest is provided and baseline_window is None, compute global thresholds from rest
-        t_high, t_low, baseline_means = self._calculate_dual_thresholds(envelope, sfreq, rest)
+        t_high, t_low, baseline_means = self._calculate_dual_thresholds(signal_envelopes, sfreq, rest)
         
         # 4. Hysteresis Masking (Sample-by-sample for millisecond precision)
-        active_mask = self._apply_hysteresis_threshold(envelope, t_high, t_low)
+        active_mask = self._apply_hysteresis_threshold(signal_envelopes, t_high, t_low)
         
         # 5. Compute Metrics
         metrics = {
             "Contamination Rate": self._compute_contamination_rate(active_mask),
-            "Local SNR": self._compute_local_snr(envelope, baseline_means),
-            "Envelope Integral": self._compute_integral(envelope),
+            "Local SNR": self._compute_local_snr(signal_envelopes, baseline_means),
+            "Envelope Integral": self._compute_integral(signal_envelopes),
             "Sustained Duration": self._compute_sustained_duration(active_mask, sfreq)
         }
 
         # 6. Generate Decision Logic
         bad_indices, trial_tags = self._perform_tagging(metrics)
 
-        return self._build_report(metrics, raw_segments, envelope, t_high, 
-                                  events, bad_indices, trial_tags)
+        return self._build_report(metrics, signals, signal_envelopes, t_high, t_low, events, bad_indices, trial_tags)
 
 
     # --- INTERNAL METRIC METHODS ---
@@ -108,7 +108,7 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
         b, a = butter(4, self.params['lp'] / (sfreq/2), btype='low')
         return filtfilt(b, a, segments, axis=-1)
     
-    def _calculate_dual_thresholds(self, envelope, sfreq, rest_raw: Optional[mne.io.BaseRaw]):
+    def _calculate_dual_thresholds(self, signal_envelopes, sfreq, rest_raw: Optional[mne.io.BaseRaw]):
         """
         Determines noise floor from rest_raw or baseline_window.
         Returns T_high, T_low, and baseline_means for SNR.
@@ -122,10 +122,10 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
             rest_data = rest_raw.copy().pick(self.picks).filter(
                 self.params['bp'][0], self.params['bp'][1], verbose=False, picks=self.picks).get_data()
             # Get envelope of rest
-            rest_env = self._extract_envelope(rest_data[np.newaxis, ...], sfreq)[0]
+            # rest_env = self._extract_envelope(rest_data[np.newaxis, ...], sfreq)[0]
+            rest_env = envelope(rest_data[np.newaxis, ...], residual=None).squeeze()
             sigmas = rest_env.std(keepdims = True, axis = -1)
             baseline_means = rest_env.mean(keepdims = True, axis = -1)
-
         # Case B: Use baseline window from the epochs
         else:
             base_win = self.params['base_win'] if self.params['base_win'] else (self.params['tmin'], 0.0)
@@ -134,22 +134,21 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
             
             for j in range(n_channels):
                 # Flatten across all epochs to get a robust channel-specific noise floor
-                rest_segment = envelope[:, j, max(0, start_idx):end_idx].flatten()
+                rest_segment = signal_envelopes[:, j, max(0, start_idx):end_idx].flatten()
                 sigmas[j] = np.std(rest_segment)
                 baseline_means[j] = np.mean(rest_segment)
 
         t_high = sigmas * self.params['mult_high']
         t_low = sigmas * self.params['mult_low']
-        
         return t_high, t_low, baseline_means
     
-    def _apply_hysteresis_threshold(self, envelope, t_high, t_low):
+    def _apply_hysteresis_threshold(self, signal_envelopes, t_high, t_low):
         
         """
         Zero-loop vectorized Schmitt Trigger.
         Fixed broadcasting to ensure (Epochs, Channels, Samples) alignment.
         """
-        n_epochs, n_chans, n_samples = envelope.shape
+        n_epochs, n_chans, n_samples = signal_envelopes.shape
         
         # 1. Force thresholds to (1, n_chans, 1) to match (n_epochs, n_chans, n_samples)
         # This prevents the "shape (1, 4, 1, 1)" broadcast error.
@@ -157,8 +156,8 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
         tl = np.asanyarray(t_low).reshape(1, n_chans, 1)
         
         # 2. Identify High (Trigger) and Low (Reset) points
-        hi = envelope > th
-        lo = envelope < tl
+        hi = signal_envelopes > th
+        lo = signal_envelopes < tl
         
         # 3. Define Event Points: any change that FORCES a state shift
         events = hi | lo
@@ -199,14 +198,14 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
         """% of trial spent above threshold."""
         return (np.sum(mask, axis=-1) / mask.shape[-1]) * 100
 
-    def _compute_local_snr(self, envelope, baseline_means):
+    def _compute_local_snr(self, signal_envelopes, baseline_means):
         # Max of task window / mean of baseline
-        task_max = np.max(envelope, axis=-1)
+        task_max = np.max(signal_envelopes, axis=-1)
         return task_max / (np.asanyarray(baseline_means).reshape(1, -1) + 1e-9)
 
-    def _compute_integral(self, envelope):
-        """Area under the envelope curve."""
-        return np.trapezoid(envelope, axis=-1)
+    def _compute_integral(self, signal_envelopes):
+        """Area under the signal_envelopes curve."""
+        return np.trapezoid(signal_envelopes, axis=-1)
     
     def _compute_sustained_duration(self, mask, sfreq):
         """
@@ -256,8 +255,8 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
             if tags[i]: 
                 bad_indices.append(i)
         return bad_indices, tags
-    
-    def _build_report(self, metrics, raw_seg, env_seg, thresholds, events, bad_idx, tags):
+
+    def _build_report(self, metrics, raw_seg, env_seg, threshold1, threshold2, events, bad_idx, tags):
         return {
             # --- CORE: GUI ALWAYS EXPECTS THESE ---
             "summary": (f"Analyzer: EMG Envelope\n"
@@ -271,7 +270,6 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
                 "tmin": self.params['tmin'],
                 "tmax": self.params['tmax']
             },
-            
                 "metrics": {
                     "Contamination Rate": {
                         "values": {ch: metrics["Contamination Rate"][:, j].tolist() for j, ch in enumerate(self.picks)}, 
@@ -289,11 +287,12 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
                         "values": {ch: metrics["Envelope Integral"][:, j].tolist() for j, ch in enumerate(self.picks)}
                         , "unit": "area"}
                 },
-            # --- EXTENSIONS: OPTIONAL DATA ---
-            "inspection_data": {
-                "raw_traces": {ch: raw_seg[:, j, :].tolist() for j, ch in enumerate(self.picks)},
-                "envelope_traces": {ch: env_seg[:, j, :].tolist() for j, ch in enumerate(self.picks)},
-                "threshold_lines": {ch: thresholds[j] for j, ch in enumerate(self.picks)}
-            }
+                # --- EXTENSIONS: OPTIONAL DATA ---
+                "inspection_data": {
+                    "raw_traces": {ch: raw_seg[:, j, :].tolist() for j, ch in enumerate(self.picks)},
+                    "envelope_traces": {ch: env_seg[:, j, :].tolist() for j, ch in enumerate(self.picks)},
+                    "threshold_high_lines": {ch: threshold1[j] for j, ch in enumerate(self.picks)},
+                    "threshold_low_lines": {ch: threshold2[j] for j, ch in enumerate(self.picks)}
+                }
         }
         

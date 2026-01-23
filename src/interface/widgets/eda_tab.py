@@ -39,6 +39,12 @@ class EDATab(QTabWidget):
     Provides a framework for artifact detection and feature comparison 
     across multiple signal contexts (e.g., Rest vs. MI).
     """
+    TRACE_COLORS = ["#1F77B4", "#FF7F0E", "#2CA02C", "#D62728", "#9467BD", 
+                    "#8C564B", "#E377C2", "#7F7F7F", "#BCBD22", "#17BECF"]
+    
+    LINE_COLORS = ["#A50F15", "#252525", "#54278F", "#006D2C", "#F0027F", 
+                   "#BF812D", "#08306B", "#01665E", "#B35806", "#000000"]
+    
     def __init__(self, session, style_kwargs=None):
         super().__init__()
         self.session = session
@@ -862,7 +868,6 @@ class EDATab(QTabWidget):
     def update_inspect_canvas(self):
         """Microscope view: Filters by Context and Trial ID."""
         if not self.last_report or 'inspection_data' not in self.last_report: return
-        
         w = self.tab_inspect
         ctx_name = w.cb_inspect_ctx.currentText()
         ch = w.cb_ch.currentText()
@@ -876,6 +881,7 @@ class EDATab(QTabWidget):
         if ctx_name not in insp_map: return
         
         ctx_data = insp_map[ctx_name]
+        
         if ch == "All Channels (Overlay)" or ch not in ctx_data['raw_traces']:
             ax.text(0.5, 0.5, "Select a specific channel", ha='center', color='gray')
             w.canvas.draw(); return
@@ -887,15 +893,24 @@ class EDATab(QTabWidget):
             
             t = np.linspace(self.last_report['artifacts'].get('tmin', 0), 
                             self.last_report['artifacts'].get('tmax', 1), len(raw))
-
-            # 3. Plot
-            ax.plot(t, raw*1e6, color='gray', alpha=0.4, label="Raw (uV)")
-            ax.plot(t, env*1e6, color='#589df6', lw=2, label="Envelope")
             
-            thresh = ctx_data.get('threshold_lines', {}).get(ch, 0)
-            if thresh != 0:
-                ax.axhline(y=thresh*1e6, color='red', ls='--', label="Threshold")
-            
+            idx_traces = 0; idx_lines = 0; idx_dots = 0
+            for key, data in ctx_data.items():
+                # 1. HANDLE TRACES (Signals over time)
+                if key.endswith("_traces"):
+                    ax.plot(t, data[ch][tid], color=self.TRACE_COLORS[idx_traces], alpha=0.8, label=key.replace("_traces", ""))    
+                    idx_traces += 1
+                # 2. HANDLE LINES (Thresholds)
+                elif key.endswith("_lines"):
+                    data_line = data[ch] 
+                    for i, line in enumerate(data_line):
+                        ax.axhline(y=line, color=self.LINE_COLORS[idx_lines], ls='--', label=key.replace("_lines", f"_{i}"))
+                        idx_lines += 1
+                # 3. HANDLE DOTS (Markers)
+                elif key.endswith("_dots"):
+                    data_dot = data[ch] 
+                    for i, dot in enumerate(data_dot):
+                        ax.scatter(x = dot[0], y=dot[1], color='blue', label=key.replace("_dots", f"_{i}"))
             # Check Master DF for the "Flagged" status of this specific trial/context
             df = self.last_report['df']
             is_bad = df[(df['context'] == ctx_name) & 
@@ -910,6 +925,10 @@ class EDATab(QTabWidget):
         except Exception as e:
             print(f"[EDA] Inspection Error: {e}")
             
+
+        
+    
+
     def _get_tab_filtered_df(self, tab):
         """Returns the Master DF filtered by the specific tab's context selector."""
         if not self.last_report or 'df' not in self.last_report: return None
