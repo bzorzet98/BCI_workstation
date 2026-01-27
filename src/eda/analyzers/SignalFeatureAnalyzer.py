@@ -2,6 +2,7 @@ import numpy as np
 import mne
 from typing import Union
 from scipy.stats import kurtosis
+from scipy.signal import envelope
 from .base_analyzer import BaseAnalyzer
 
 class SignalFeatureAnalyzer(BaseAnalyzer):
@@ -24,6 +25,7 @@ class SignalFeatureAnalyzer(BaseAnalyzer):
                  n_pseudo_trials = None,
                  zc_threshold=1e-6,
                  **kwargs):
+        
         super().__init__(picks, **kwargs)
         self.params = {
             'bandpass_filter':bandpass_filter,
@@ -33,7 +35,7 @@ class SignalFeatureAnalyzer(BaseAnalyzer):
             'tmax': tmax,
             'n_pseudo': n_pseudo_trials, # Target trials if no events found
             'zc_eps': zc_threshold,
-            'visuals': ['hist', 'mapping', 'scatter']
+            'visuals': ['hist', 'mapping', 'scatter','inspect']
         }
 
     def analyze(self, inst: Union[mne.io.BaseRaw, mne.Epochs]) -> dict:
@@ -59,8 +61,9 @@ class SignalFeatureAnalyzer(BaseAnalyzer):
             "MAV": (self._compute_mav(data), "µV"),
             "Zero Crossing": (self._compute_zc(data), "count"),
             "Waveform Length": (self._compute_wl(data), "dist"),
-            "Variance": (self._compute_variance(data), "µV²"),
+            "Variance": (self._compute_variance(data), "V²"),
             "Band Power": (self._compute_band_power(epochs), "dB"),
+            "RMS": (self._compute_RMS(data), "V"),
         }
 
         # Add Hjorth parameters (Activity, Mobility, Complexity)
@@ -68,6 +71,10 @@ class SignalFeatureAnalyzer(BaseAnalyzer):
         results["Hjorth Activity"] = (h_act, "var")
         results["Hjorth Mobility"] = (h_mob, "ratio")
         results["Hjorth Complexity"] = (h_com, "ratio")
+        
+        signal_envelopes, integral_envelope = self._compute_envelope_integral(data)
+        results["Envelope Integral"] = (integral_envelope, "V·s")
+        results["Signal Envelope"] = (signal_envelopes, "V")
 
         # 3. Construct the Standardized Report Dictionary
         return self._build_report(epochs, results, ch_names, sfreq)
@@ -141,6 +148,7 @@ class SignalFeatureAnalyzer(BaseAnalyzer):
     def _compute_kurtosis(self, data):
         """Kurtosis"""
         return kurtosis(data,-1)
+    
     def _compute_mav(self, data):
         """Mean Absolute Value: Average of absolute samples."""
         return np.mean(np.abs(data), axis=-1)
@@ -186,18 +194,28 @@ class SignalFeatureAnalyzer(BaseAnalyzer):
 
         return activity, mobility, complexity
     
+    def _compute_RMS(self, data):
+        """Root Mean Square (RMS)"""
+        return np.sqrt(np.mean(data**2, axis=-1))
+    
+    def _compute_envelope_integral(self, data):
+        signal_envelopes = envelope(data, residual=None)
+        integral_envelope = np.trapezoid(signal_envelopes, axis=-1)
+        return signal_envelopes, integral_envelope
+
     def _build_report(self, epochs, results, ch_names, sfreq):
         metrics_report = {}
         for name, (vals, unit) in results.items():
-            metrics_report[name] = {
-                "values": {ch: vals[:, i].tolist() for i, ch in enumerate(ch_names)},
-                "unit": unit
-            }
-
+            if name != "Signal Envelope":
+                metrics_report[name] = {
+                    "values": {ch: vals[:, i].tolist() for i, ch in enumerate(ch_names)},
+                    "unit": unit
+                }
+        data = epochs.get_data()
         # 4. Final Standard Report
         return {
             "summary": f"Feature Analysis: {len(epochs)} trials | SFreq: {sfreq}Hz",
-            "visuals": ["hist", "scatter", "mapping"],
+            "visuals": ["hist", "scatter", "mapping", "inspect"],
             "artifacts": {
                 "bad_indices": [], "bad_tags": [],
                 "event_types": epochs.events[:, 2].tolist(),
@@ -207,5 +225,9 @@ class SignalFeatureAnalyzer(BaseAnalyzer):
             "metadata": {
                 "sfreq": epochs.info['sfreq'],
                 "ch_names": ch_names
-            }
+            },
+            "inspection_data": {
+                    "raw_traces": {ch: data[:, j, :].tolist() for j, ch in enumerate(self.picks)},
+                    "envelope_traces": {ch: results['Signal Envelope'][0][:, j, :].tolist() for j, ch in enumerate(self.picks)}
+                }
         }

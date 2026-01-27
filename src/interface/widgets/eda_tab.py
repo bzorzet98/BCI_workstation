@@ -898,7 +898,7 @@ class EDATab(QTabWidget):
             for key, data in ctx_data.items():
                 # 1. HANDLE TRACES (Signals over time)
                 if key.endswith("_traces"):
-                    ax.plot(t, data[ch][tid], color=self.TRACE_COLORS[idx_traces], alpha=0.8, label=key.replace("_traces", ""))    
+                    ax.plot(t, np.array(data[ch][tid]), color=self.TRACE_COLORS[idx_traces], alpha=0.8, label=key.replace("_traces", ""))    
                     idx_traces += 1
                 # 2. HANDLE LINES (Thresholds)
                 elif key.endswith("_lines"):
