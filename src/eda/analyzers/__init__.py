@@ -1,3 +1,4 @@
 from .base_analyzer import BaseAnalyzer
 from .EMGEnvelopeAnalyzer import EMGEnvelopeAnalyzer
 from .SignalFeatureAnalyzer import SignalFeatureAnalyzer
+from .EMGConsistencyAnalyzer import EMGConsistencyAnalyzer
