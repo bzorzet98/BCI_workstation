@@ -7,7 +7,29 @@ from src.preprocessing import EEGPreprocessor
 
 class SessionState:
     """
-    The Model. Manages a Multi-Signal Workspace using only structured pipelines.
+    The SessionState class serves as the core model for managing and processing 
+    multi-signal EEG workspaces. It provides a structured and modular approach 
+    to handle raw EEG data, preprocessing pipelines, and event-based epoching.
+
+    Key Responsibilities:
+    - Workspace Management: Organizes EEG signals into a dictionary structure 
+      where each signal is associated with a unique context label. This allows 
+      for efficient access and manipulation of individual signals or groups of signals.
+    - Logical Grouping: Supports logical grouping of signals (e.g., grouping multiple 
+      runs of a task like 'motor_imagery') to streamline preprocessing and analysis.
+    - Preprocessing Pipelines: Maintains a structured pipeline for each context, 
+      enabling step-by-step transformations such as filtering, epoching, and artifact removal.
+    - Event Handling: Provides robust methods to extract events and event IDs from 
+      raw signals or epochs, supporting both annotations and stimulus channels.
+    - Undo and Reset: Allows reverting the last preprocessing step or resetting 
+      signals to their original state, ensuring flexibility during iterative analysis.
+    - JSON Integration: Supports loading and applying preprocessing pipelines from 
+      JSON files, enabling reproducibility and external configuration.
+
+    This class is designed to work seamlessly with MNE-Python objects (e.g., Raw, Epochs) 
+    and integrates with an EEGPreprocessor worker to apply transformations. It is 
+    particularly suited for EEG/MEG workflows that require handling multiple signals 
+    and maintaining a clear history of preprocessing steps.
     """
 
     def __init__(self):

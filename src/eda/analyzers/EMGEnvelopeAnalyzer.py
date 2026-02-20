@@ -3,6 +3,7 @@ import mne
 from typing import Union, Optional, Tuple
 from scipy.signal import butter, filtfilt, envelope
 
+from src.eda.eda_report import EDAReport, EDAArtifacts, EDAMetric
 from .base_analyzer import BaseAnalyzer
 
 class EMGEnvelopeAnalyzer(BaseAnalyzer):
@@ -97,8 +98,8 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
         # 6. Generate Decision Logic
         bad_indices, trial_tags = self._perform_tagging(metrics)
 
-        return self._build_report(metrics, signals, signal_envelopes, t_high, t_low, events, bad_indices, trial_tags)
-
+        return self._build_report(metrics, signals, signal_envelopes, 
+                                  bad_indices, trial_tags, t_high, t_low, events[:, 2].tolist() if events is not None else [])
 
     # --- INTERNAL METRIC METHODS ---
     def _extract_envelope(self, segments, sfreq):
@@ -256,43 +257,48 @@ class EMGEnvelopeAnalyzer(BaseAnalyzer):
                 bad_indices.append(i)
         return bad_indices, tags
 
-    def _build_report(self, metrics, raw_seg, env_seg, threshold1, threshold2, events, bad_idx, tags):
-        return {
-            # --- CORE: GUI ALWAYS EXPECTS THESE ---
-            "summary": (f"Analyzer: EMG Envelope\n"
-                        f"Flagged Trials: {len(bad_idx)} / {len(tags)}\n"
-                        f"Threshold: {self.params['mult']}x SD baseline"),
-            "visuals": ["hist", "scatter", "mapping", "inspect"],
-            "artifacts": {
-                "bad_indices": bad_idx,
-                "bad_tags": [tags[i] for i in bad_idx],
-                "event_types": events[:, 2].tolist(), # Needed for coloring plots
-                "tmin": self.params['tmin'],
-                "tmax": self.params['tmax']
-            },
-                "metrics": {
-                    "Contamination Rate": {
-                        "values": {ch: metrics["Contamination Rate"][:, j].tolist() for j, ch in enumerate(self.picks)}, 
-                        "unit": "%"
-                        },
-                    "Local SNR": {
-                        "values": {ch: metrics["Local SNR"][:, j].tolist() for j, ch in enumerate(self.picks)}, 
-                        "unit": "ratio"
-                        },
-                    "Sustained Duration": {
-                        "values": {ch: metrics["Sustained Duration"][:, j].tolist() for j, ch in enumerate(self.picks)}, 
-                        "unit": "s"
-                        },
-                    "Envelope Integral": {
-                        "values": {ch: metrics["Envelope Integral"][:, j].tolist() for j, ch in enumerate(self.picks)}
-                        , "unit": "area"}
-                },
-                # --- EXTENSIONS: OPTIONAL DATA ---
-                "inspection_data": {
-                    "raw_traces": {ch: raw_seg[:, j, :].tolist() for j, ch in enumerate(self.picks)},
-                    "envelope_traces": {ch: env_seg[:, j, :].tolist() for j, ch in enumerate(self.picks)},
-                    "threshold_high_lines": {ch: threshold1[j] for j, ch in enumerate(self.picks)},
-                    "threshold_low_lines": {ch: threshold2[j] for j, ch in enumerate(self.picks)}
-                }
+    def _build_report(self, metrics, raw_seg, env_seg, bad_idx, tags, threshold1, threshold2, events):
+        # Create strict metric objects
+        report_metrics = {
+            "Contamination Rate": EDAMetric(
+                values={ch: metrics["Contamination Rate"][:, j].tolist() for j, ch in enumerate(self.picks)},
+                unit="%"
+            ),
+            "Local SNR": EDAMetric(
+                values={ch: metrics["Local SNR"][:, j].tolist() for j, ch in enumerate(self.picks)},
+                unit="ratio"
+            ),
+            "Sustained Duration": EDAMetric(
+                values={ch: metrics["Sustained Duration"][:, j].tolist() for j, ch in enumerate(self.picks)},
+                unit="s"
+            ),
+            "Envelope Integral": EDAMetric(
+                values={ch: metrics["Envelope Integral"][:, j].tolist() for j, ch in enumerate(self.picks)},
+                unit="area"
+            )
         }
+
+        return EDAReport(
+            summary=(f"Analyzer: EMG Envelope Artifacts\n"
+                     f"Flagged Trials: {len(bad_idx)} / {raw_seg.shape[0]}\n"
+                     f"Threshold Config: Adaptive Baseline"),
+            visuals=["hist", "scatter", "mapping", "inspect"],
+            artifacts=EDAArtifacts(
+                bad_indices=bad_idx,
+                bad_tags=[tags[i] for i in bad_idx]
+            ),
+            metrics=report_metrics,
+            metadata={
+                "event_types": events,  
+                "tmin": self.params.get('tmin', 0),
+                "tmax": self.params.get('tmax', 1)
+            },
+            inspection_data={
+                "x-axis": np.linspace(self.params['tmin'], self.params['tmax'], raw_seg.shape[-1]).tolist(),
+                "raw_traces": {ch: raw_seg[:, j, :].tolist() for j, ch in enumerate(self.picks)},
+                "envelope_traces": {ch: env_seg[:, j, :].tolist() for j, ch in enumerate(self.picks)},
+                "threshold_high_lines": {ch: threshold1[j] for j, ch in enumerate(self.picks)},
+                "threshold_low_lines": {ch: threshold2[j] for j, ch in enumerate(self.picks)}
+            }
+        )
         

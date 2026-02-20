@@ -20,6 +20,7 @@ from src.interface.themes import STYLESHEET_ACADEMIC, STYLESHEET_CYBERPUNK, STYL
 
 
 class BCIWorkstationGUI(QMainWindow):
+    
     def __init__(self, theme_name="ACADEMIC"):
         super().__init__()
         
@@ -97,7 +98,7 @@ class BCIWorkstationGUI(QMainWindow):
         self.tab_proc = ProcessingTab(self.session, self.style_kwargs)
         self.tab_time = TimeDomainTab(self.session, self.style_kwargs)
         self.tab_freq = FreqDomainTab(self.session, self.style_kwargs)
-        self.tab_eda = EDATab(self.session, self.style_kwargs)
+        self.tab_eda = EDATab(self.session, parent=self)
         self.tab_subject_info = SubjectInfoTab(self.session, self.style_kwargs)
         
         self.tabs.addTab(self.tab_workspace, "Data Loader")

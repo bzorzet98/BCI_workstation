@@ -12,17 +12,56 @@ DATASETS_AVAILABLE = {
 
 class DataManager:
     """
-    Factory class responsible for managing, instantiating, and retrieving EEG data.
-    
-    It serves as an abstraction layer between the User Interface (GUI) and the specific 
-    EEG dataset classes. Its primary role is to ensure that data requested by the app 
-    is delivered in a standardized format (Dictionary of MNE Raw objects), regardless 
-    of the original database's internal hierarchy.
+    The DataManager class is a factory and management utility designed to handle EEG datasets 
+    in a modular and standardized way. It abstracts the complexities of interacting with 
+    various EEG dataset classes and provides a unified interface for loading, managing, 
+    and retrieving EEG data.
+
+    Purpose:
+        This class acts as a bridge between the User Interface (GUI) and the underlying 
+        dataset implementations. It ensures that the data requested by the application 
+        is delivered in a consistent format, regardless of the internal structure or 
+        hierarchy of the original dataset.
+
+    Key Responsibilities:
+        - Dynamically instantiate and manage dataset classes based on user selection.
+        - Provide a list of available datasets that the system supports.
+        - Retrieve metadata such as subject IDs, context labels, and session information 
+          from the currently active dataset.
+        - Load EEG data for specific subjects, contexts, and sessions, and flatten 
+          hierarchical structures (e.g., runs or noise types) into a standardized format 
+          for easier processing.
 
     Attributes:
-        active_dataset_instance (Any): The instantiated dataset class currently in use.
-        active_dataset_name (str): The string identifier of the selected dataset.
-        DATASETS (dict): Mapping of dataset names to their respective classes.
+        active_dataset_instance (Any): The currently instantiated dataset class. This is 
+            dynamically set based on the dataset selected by the user.
+        active_dataset_name (Optional[str]): The name of the currently active dataset. 
+            This is used to track which dataset is currently loaded.
+        DATASETS (dict): A mapping of dataset names (as strings) to their respective 
+            dataset classes. This allows for dynamic instantiation of datasets.
+
+    Usage:
+        1. Retrieve the list of available datasets using `get_available_datasets()`.
+        2. Load a specific dataset class using `load_dataset_class(name)`.
+        3. Access metadata about the dataset (e.g., subjects, contexts, sessions) 
+           using `get_metadata()`.
+        4. Load EEG data for specific subjects and contexts using `load_data(subject_id, contexts, session_id)`.
+
+    Example Workflow:
+        - The user selects a dataset (e.g., "Cho2017") from the GUI.
+        - The DataManager dynamically loads the corresponding dataset class.
+        - The user requests metadata about the dataset, such as available subjects and contexts.
+        - The user selects a subject, context, and session, and the DataManager retrieves 
+          the corresponding EEG data in a standardized format.
+
+    Benefits:
+        - Decouples the GUI and application logic from the specifics of individual dataset implementations.
+        - Simplifies the process of working with multiple datasets by providing a consistent interface.
+        - Ensures that data is delivered in a format compatible with downstream processing tools 
+          (e.g., MNE-Python).
+
+    This class is essential for managing the complexity of working with diverse EEG datasets 
+    and provides a robust foundation for building applications that require EEG data analysis.
     """
 
     def __init__(self):

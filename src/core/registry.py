@@ -7,8 +7,65 @@ import importlib
 from src.utils import import_class
 
 class Registry:
-    """
-    Knowledge base for available processing methods and their arguments.
+    """Registry
+    The `Registry` class serves as a centralized knowledge base for managing and discovering 
+    available processing methods, custom functions, and their respective arguments. It is 
+    designed to dynamically inspect and provide metadata about processing steps, analyzers, 
+    and their parameters, enabling flexible and extensible workflows for EEG/MEG data 
+    processing.
+    ### Attributes:
+    - `ALLOWED_RAW_METHODS` (list of str): 
+        A predefined list of methods that can be applied to `mne.io.Raw` objects. These methods 
+        include common preprocessing steps such as filtering, resampling, and channel selection.
+    - `ALLOWED_EPOCH_METHODS` (list of str): 
+        A predefined list of methods that can be applied to `mne.Epochs` objects. These methods 
+        include operations like baseline correction, time shifting, and channel selection.
+    - `CUSTOM_FUNCTIONS` (list of str): 
+        Dynamically discovered custom preprocessing functions from the `preprocessing_functions` 
+        module. Only functions that do not start with an underscore (`_`) are included.
+    ### Methods:
+    1. `get_available_steps(data_obj)`:
+         - **Purpose**: Determines the available processing steps for a given data object 
+             (e.g., `Raw` or `Epochs`).
+         - **Returns**: A list of dictionaries, where each dictionary represents a method or 
+             function with its name and type (`method`, `function`, or `class_init`).
+    2. `get_analyzer_params(class_name, module_path)`:
+         - **Purpose**: Dynamically inspects the `__init__` method of a class to extract its 
+             arguments and their default values.
+         - **Parameters**:
+             - `class_name` (str): The name of the class to inspect.
+             - `module_path` (str): The module path where the class is defined.
+         - **Returns**: A dictionary mapping argument names to their default values. If an 
+             argument has no default, its value is set to `None`.
+    3. `discover_eda_analyzers()`:
+         - **Purpose**: Scans the `src/eda/analyzers` directory to discover and list all 
+             available analyzer classes.
+         - **Returns**: A dictionary where keys are class names and values are their respective 
+             module paths.
+    4. `get_defaults(name, step_type)`:
+         - **Purpose**: Introspects the signature of a method, function, or class initializer 
+             to extract its arguments and their default values.
+         - **Parameters**:
+             - `name` (str): The name of the method, function, or class initializer.
+             - `step_type` (str): The type of the step (`method`, `function`, or `class_init`).
+         - **Returns**: A dictionary mapping argument names to their default values. Special 
+             handling is applied for certain cases, such as setting `preload=True` for the 
+             `Epochs` class.
+    ### Use Cases:
+    - **Dynamic Discovery**: The `Registry` class enables dynamic discovery of available 
+        processing steps and their parameters, making it easier to build flexible and 
+        user-configurable pipelines.
+    - **Analyzer Management**: It provides tools to discover and manage custom analyzers 
+        defined in the `src/eda/analyzers` directory.
+    - **GUI Integration**: The metadata provided by the `Registry` can be used to populate 
+        graphical user interfaces (GUIs) with available processing options and their default 
+        parameters.
+    ### Notes:
+    - The class relies heavily on Python's `inspect` module for dynamic introspection.
+    - It assumes a specific directory structure and naming conventions for analyzers and 
+        preprocessing functions.
+    - Error handling is implemented to ensure robustness when inspecting classes or modules 
+        that may not exist or have unexpected structures.
     """
     
     ALLOWED_RAW_METHODS = [
