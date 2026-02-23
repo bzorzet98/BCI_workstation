@@ -24,7 +24,6 @@ class SignalFeatureAnalyzer(BaseAnalyzer):
                  tmin=0.0, 
                  tmax=2.0, 
                  n_pseudo_trials = None,
-                 zc_threshold=1e-6,
                  **kwargs):
         
         super().__init__(picks, **kwargs)
@@ -35,7 +34,6 @@ class SignalFeatureAnalyzer(BaseAnalyzer):
             'tmin': tmin,
             'tmax': tmax,
             'n_pseudo': n_pseudo_trials, # Target trials if no events found
-            'zc_eps': zc_threshold,
             'visuals': ['hist', 'mapping', 'scatter','inspect']
         }
 
@@ -60,7 +58,6 @@ class SignalFeatureAnalyzer(BaseAnalyzer):
         results = {
             "Kurtosis":(self._compute_kurtosis(data), ""),
             "MAV": (self._compute_mav(data), "µV"),
-            "Zero Crossing": (self._compute_zc(data), "count"),
             "Waveform Length": (self._compute_wl(data), "dist"),
             "Variance": (self._compute_variance(data), "V²"),
             "Band Power": (self._compute_band_power(epochs), "dB"),
@@ -153,15 +150,6 @@ class SignalFeatureAnalyzer(BaseAnalyzer):
     def _compute_mav(self, data):
         """Mean Absolute Value: Average of absolute samples."""
         return np.mean(np.abs(data), axis=-1)
-
-    def _compute_zc(self, data):
-        """Zero Crossing: Number of times signal crosses zero."""
-        # We use a small epsilon to avoid counting noise as crossings
-        eps = self.params['zc_eps']
-        # Find points where sign changes
-        diff_sign = np.diff(np.sign(data), axis=-1)
-        # Count crossings that are significant
-        return np.sum((diff_sign != 0) & (np.abs(np.diff(data, axis=-1)) > eps), axis=-1)
 
     def _compute_wl(self, data):
         """Waveform Length: Cumulative length of the waveform over the time segment."""

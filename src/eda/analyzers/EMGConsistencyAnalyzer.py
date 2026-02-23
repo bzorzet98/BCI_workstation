@@ -7,17 +7,17 @@ from scipy.stats import median_abs_deviation
 from scipy.signal import envelope
 
 class EMGConsistencyAnalyzer(BaseAnalyzer):
-    def __init__(self, picks=["EMG1", "EMG2", "EMG3", "EMG4"],
+    def __init__(self, picks=["EMG1","EMG3", ],
                  bandpass_filter=(10.0, 95.0),
                  notch_filter=[50.0],
-                 z_threshold=3.5,
+                 percentage_threshold=0.15,
                  n_pseudo_trials=40,
                  **kwargs):
-        # Correctly merge parameters into self.params
+        
         params = {
             'bandpass_filter': bandpass_filter,
             'notch_filter': notch_filter,
-            'z_threshold': z_threshold,
+            'percentage_threshold': percentage_threshold,
             'tmin': kwargs.get('tmin', 0),
             'tmax': kwargs.get('tmax', 1.0),
             'n_pseudo_trials': n_pseudo_trials,
@@ -30,66 +30,110 @@ class EMGConsistencyAnalyzer(BaseAnalyzer):
                 reference: Union[mne.io.BaseRaw, mne.Epochs], 
                 baseline: Optional[mne.io.BaseRaw] = None):
         
-        # 1. Preprocess (Note: .copy() prevents modifying original data)
+        # 1. Preprocess
         data_proc = self._preprocess(data.copy())
         ref_proc = self._preprocess(reference.copy())
         base_proc = self._preprocess(baseline.copy())
 
         # 2. Compute Metrics
-        # data.get_data() returns (n_epochs, n_channels, n_times)
-        rms_mi = self._calculate_rms(data_proc.get_data(picks=self.picks))
+        rms_data = self._calculate_rms(data_proc.get_data(picks=self.picks))
         rms_ref = self._calculate_rms(ref_proc.get_data(picks=self.picks))
         rms_baseline = self._calculate_rms(base_proc.get_data(picks=self.picks))
         
-        envint_mi, env_traces = self._calculate_envelope_integral(data_proc.get_data(picks=self.picks))
+        envint_data, env_data_traces = self._calculate_envelope_integral(data_proc.get_data(picks=self.picks))
         envint_ref, _ = self._calculate_envelope_integral(ref_proc.get_data(picks=self.picks))
         envint_baseline, _ = self._calculate_envelope_integral(base_proc.get_data(picks=self.picks))
         
-        # 3. Normalize Metrics by Mean Baseline
-        # We take the mean across time/epochs of the baseline to get a scalar per channel
-        b_rms = np.mean(rms_baseline, axis=0) + 1e-9
-        b_env = np.mean(envint_baseline, axis=0) + 1e-9
-        
-        
-        rms_ref_norm = np.log(rms_ref / (b_rms + 1e-9) + 1e-9)
-        rms_mi_norm  = np.log(rms_mi  / (b_rms + 1e-9) + 1e-9)
+        # 3. Dynamic Range Calculation (Medians)
+        # Using medians makes the scaling robust against signal artifacts
+        med_base_rms = np.median(rms_baseline, axis=0)
+        med_base_env = np.median(envint_baseline, axis=0)
 
-        env_ref_norm = np.log(envint_ref / (b_env + 1e-9) + 1e-9)
-        env_mi_norm  = np.log(envint_mi  / (b_env + 1e-9) + 1e-9)
-        
-        # 4. Calculate Robust Reference Distributions (Median & MAD)
-        # 0.6745 is the scaling factor to make MAD consistent with SD of a normal distribution
-        ref_rms_med = np.median(rms_ref_norm, axis=0)
-        ref_rms_mad = median_abs_deviation(rms_ref_norm, axis=0) * 1.4826 
+        ref_labels = ref_proc.events[:, 2]
+        unique_labels = np.unique(ref_labels)
+        med_ref_rms = {}
+        med_ref_env = {}
+        for i in unique_labels:
+            med_ref_rms[i] = np.median(rms_ref[ref_labels == i], axis=0)
+            med_ref_env[i] = np.median(envint_ref[ref_labels == i], axis=0)
 
-        ref_env_med = np.median(env_ref_norm, axis=0)
-        ref_env_mad = median_abs_deviation(env_ref_norm, axis=0) * 1.4826
-
-        # 5. Calculate Modified Z-Scores
-        # This tells us: "How many robust-standard-deviations is this MI trial from the Reference Median?"
-        z_rms = (rms_mi_norm - ref_rms_med) / (ref_rms_mad + 1e-9)
-        z_env = (env_mi_norm - ref_env_med) / (ref_env_mad + 1e-9)
-
-        # 4. Perform Tagging (fixing the ambiguity error)
-        bad_idx, tags = self._perform_tagging(z_rms, z_env)
-
-        # 5. Build Report (Matching your specific Schema)
+        # 4. Perform Tagging (Percentage-based Policing)
+        bad_idx, tags, rms_norm, env_norm = self._perform_tagging(
+            rms_data, 
+            med_base_rms,
+            med_ref_rms
+        )
+            
+        # 5. Build Report
         metrics_payload = {
-            "RMS Z-Score": z_rms,
-            "Envelope Integral Z-Score": z_env
+            "RMS_Percentage": rms_norm,
+            "Envelope_Percentage": env_norm,
         }
-        
         events = data_proc.events[:, 2] if data_proc.events is not None else []
         
         return self._build_report(
             metrics=metrics_payload,
             raw_seg=data_proc.get_data(picks=self.picks),
-            env_seg=env_traces,
+            env_seg=env_data_traces,
             bad_idx=bad_idx,
             tags=tags,
             events=events
         )
 
+
+    def _perform_tagging(self, rms_data, b_rms, ref_rms):
+        """
+        rms_data: (n_epochs, n_channels) - Raw MI metrics
+        b_rms: (n_channels,) - Median of rest
+        ref_rms: Dict {label: array(n_channels,)} - Median of movement per class
+        """
+        n_epochs = rms_data.shape[0]
+        bad_indices = []
+        tags = [[] for _ in range(n_epochs)]
+        lambda_p = self.params.get('percentage_threshold', 0.15)
+        
+        # 1. Rescale the data for every label
+        # This creates a dict where each value is an (n_epochs, n_channels) matrix
+        # 0.0 = Rest, 1.0 = Median of that specific Movement Class
+        rms_data_norm = {}
+        for label, m_rms in ref_rms.items():
+            # Vectorized normalization across all epochs and channels for this label
+            rms_data_norm[label] = (rms_data - b_rms) / (m_rms - b_rms + 1e-9)
+
+        # 2. Policing: Flag if any trial exceeds lambda_p for ANY class-reference
+        # Logic: If EMG1 looks like 15% of 'Left Movement' OR EMG3 looks like 15% of 'Right Movement'...
+        for label, norm_matrix in rms_data_norm.items():
+            # Find where any channel in any epoch exceeds the threshold
+            # combined_mask shape: (n_epochs, n_channels)
+            mask = norm_matrix >= lambda_p
+            
+            rows, cols = np.where(mask)
+            for r, c in zip(rows, cols):
+                ch_name = self.picks[c]
+                percentage = norm_matrix[r, c] * 100
+                tag_msg = f"{ch_name}: {percentage:.1f}% of Label {label} ME"
+                
+                if tag_msg not in tags[r]:
+                    tags[r].append(tag_msg)
+                
+                if r not in bad_indices:
+                    bad_indices.append(r)
+
+        # 3. For the final metrics payload, we need a single representative matrix.
+        # Usually, we take the maximum normalization across labels to show 'worst case' leakage.
+        all_norms = np.array(list(rms_data_norm.values())) # (n_labels, n_epochs, n_channels)
+        max_rms_norm = np.max(all_norms, axis=0)
+        
+        return sorted(bad_indices), tags, max_rms_norm, max_rms_norm # Returning norms for the report
+    
+
+    def _calculate_rms(self, data):
+        return np.sqrt(np.mean(data**2, axis=-1))
+    
+    def _calculate_envelope_integral(self, data):
+        signal_envelopes = envelope(data, residual=None)
+        integral_envelope = np.trapezoid(signal_envelopes, axis=-1)
+        return integral_envelope, signal_envelopes
     
     def _preprocess(self, raw):
         # Returns data array (n_chans, n_samples)
@@ -178,29 +222,6 @@ class EMGConsistencyAnalyzer(BaseAnalyzer):
         integral_envelope = np.trapezoid(signal_envelopes, axis=-1)
         return integral_envelope, signal_envelopes
     
-    def _perform_tagging(self, z_rms, z_env):
-        n_epochs = z_rms.shape[0]
-        bad_indices = []
-        tags = [[] for _ in range(n_epochs)]
-        thresh = self.params['z_threshold']
-
-        for i in range(n_epochs):
-            for j, ch in enumerate(self.picks):
-                # Access individual floats to avoid ambiguity error
-                z_r = z_rms[i, j]
-                z_e = z_env[i, j]
-                
-                if abs(z_r) > thresh or abs(z_e) > thresh:
-                    if z_r > thresh and z_e > thresh:
-                        tags[i].append(f"{ch}: Outlier Dist (Z_rms={z_r:.1f})")
-                    elif z_r > thresh:
-                        tags[i].append(f"{ch}: High-Freq Noise")
-                    else:
-                        tags[i].append(f"{ch}: Baseline Drift")
-
-            if tags[i]:
-                bad_indices.append(i)
-        return bad_indices, tags
 
     def _build_report(self, metrics, raw_seg, env_seg, bad_idx, tags, events):
         # Convert dictionary metrics into EDAMetric dataclasses
